@@ -5,6 +5,9 @@ import SwiftUI
 struct MobileVideoActionBar: View {
     let video: VideoItem
     let detail: VideoInfoData?
+    /// AirPlay state lives with playback, so the cast cell can show whether a
+    /// route is connected.
+    let playback: MobilePlaybackController
 
     @Environment(AppModel.self) private var model
     @Environment(\.colorScheme) private var scheme
@@ -24,13 +27,16 @@ struct MobileVideoActionBar: View {
             favoriteMenu
             watchLaterButton
             downloadAction
+            castAction
             ShareLink(item: video.pageURL) {
                 ActionCell(icon: "arrowshape.turn.up.right", label: shareLabel)
             }
             .buttonStyle(BtbPressableStyle(scale: 0.9))
         }
         .padding(.horizontal, 6)
-        .frame(height: 40)
+        // Slimmer than the old 40: the row is an icon strip now, and a shorter
+        // bar sits more evenly under the video.
+        .frame(height: 34)
         .background(AppTheme.background(scheme))
         .overlay(alignment: .bottom) {
             Rectangle().fill(AppTheme.divider(scheme)).frame(height: 0.5)
@@ -51,6 +57,27 @@ struct MobileVideoActionBar: View {
                 await model.loadPlaylists()
             }
         }
+    }
+
+    // MARK: - AirPlay
+
+    /// Apple's route picker sits invisibly over our own icon: it is the only
+    /// way to open the device list, and it cannot be triggered from code.
+    private var castAction: some View {
+        ZStack {
+            ActionCell(
+                icon: "airplayvideo",
+                label: playback.isCasting
+                    ? "正在投屏到\(playback.castDeviceName ?? "电视")"
+                    : "投屏",
+                isActive: playback.isCasting
+            )
+            .allowsHitTesting(false)
+
+            AirPlayRouteButton()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .frame(maxWidth: .infinity)
     }
 
     // MARK: - Like (tap) / Triple (long press)
@@ -249,7 +276,7 @@ private struct ActionCell: View {
             }
             .foregroundStyle(isActive ? AppTheme.brand : AppTheme.secondary(scheme))
             .frame(maxWidth: .infinity)
-            .frame(height: 40)
+            .frame(height: 34)
             .contentShape(Rectangle())
             .accessibilityLabel(label)
             .animation(BtbMotion.snappy, value: isActive)

@@ -18,6 +18,9 @@ final class MobilePlaybackController: NSObject {
     private(set) var currentTime: Double = 0
     private(set) var duration: Double = 0
     private(set) var isPlaying = false
+    /// True while the picture is playing on an AirPlay device instead of the phone.
+    private(set) var isCasting = false
+    private(set) var castDeviceName: String?
     private(set) var didReachEnd = false
     var isScrubbing = false {
         didSet {
@@ -90,6 +93,9 @@ final class MobilePlaybackController: NSObject {
     @ObservationIgnored private var interruptionObserver: NSObjectProtocol?
     @ObservationIgnored private var resumeAfterInterruption = false
     @ObservationIgnored private var pipController: AVPictureInPictureController?
+    /// AirPlay: the route picker hands playback to a TV, and the page swaps the
+    /// picture for a cast panel while it is there.
+    @ObservationIgnored private var externalPlaybackObservation: NSKeyValueObservation?
     /// Lock screen / Control Center / Dynamic Island mirroring (B5).
     @ObservationIgnored private let nowPlaying = PlaybackNowPlaying()
 
@@ -224,6 +230,7 @@ final class MobilePlaybackController: NSObject {
             newPlayer.isMuted = isMuted
             newPlayer.defaultRate = Float(playbackRate)
             player = newPlayer
+            observeExternalPlayback(newPlayer)
             watch(item: item, seekTo: 0, autoplay: true)
             return
         }
@@ -327,6 +334,7 @@ final class MobilePlaybackController: NSObject {
         newPlayer.isMuted = isMuted
         newPlayer.defaultRate = Float(playbackRate)
         player = newPlayer
+        observeExternalPlayback(newPlayer)
         sessionID = stream.sessionID
         #if DEBUG
         btbDebugLog("play: created player for \(url.absoluteString) session=\(stream.sessionID)")
@@ -586,6 +594,51 @@ final class MobilePlaybackController: NSObject {
         pipController = controller
     }
 
+    // MARK: - AirPlay
+
+    /// Watches the route the system picked. The picker view is Apple's, so this
+    /// is the only signal that a cast actually started.
+    private func observeExternalPlayback(_ player: AVPlayer) {
+        externalPlaybackObservation?.invalidate()
+        externalPlaybackObservation = player.observe(
+            \.isExternalPlaybackActive,
+            options: [.initial, .new]
+        ) { [weak self] player, _ in
+            let active = player.isExternalPlaybackActive
+            Task { @MainActor in self?.updateCasting(active) }
+        }
+    }
+
+    private func updateCasting(_ active: Bool) {
+        guard active != isCasting else { return }
+        isCasting = active
+        if active {
+            let outputs = AVAudioSession.sharedInstance().currentRoute.outputs
+            castDeviceName = outputs.first(where: { $0.portType == .airPlay })?.portName
+                ?? outputs.first?.portName
+            #if DEBUG
+            btbDebugLog("cast: started device=\(castDeviceName ?? "?")")
+            #endif
+        } else {
+            castDeviceName = nil
+            #if DEBUG
+            btbDebugLog("cast: stopped")
+            #endif
+        }
+    }
+
+    /// Brings the picture back to the phone. Turning external playback off is
+    /// what actually drops the AirPlay route; it is re-allowed a moment later
+    /// so the button keeps working.
+    func stopCasting() {
+        guard let player else { return }
+        player.allowsExternalPlayback = false
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            player.allowsExternalPlayback = true
+        }
+    }
+
     func togglePiP() {
         guard let pipController else { return }
         if pipController.isPictureInPictureActive {
@@ -639,6 +692,9 @@ final class MobilePlaybackController: NSObject {
     }
 
     private func teardownPlayer() {
+        externalPlaybackObservation?.invalidate()
+        externalPlaybackObservation = nil
+        if isCasting { updateCasting(false) }
         clearStatusObservation()
         removeEndObserver()
         player?.pause()

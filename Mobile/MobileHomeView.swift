@@ -186,6 +186,11 @@ struct MobileHomeView: View {
         .ignoresSafeArea(.container, edges: .top)
         .background(AppTheme.background(scheme))
         .toolbar(.hidden, for: .navigationBar)
+        // The liquid-glass tab bar leaves the screen together with the
+        // header, so scrolling down really does clear the whole top and
+        // bottom chrome.
+        .toolbar(bars.hidden ? .hidden : .visible, for: .tabBar)
+        .animation(BtbMotion.snappy, value: bars.hidden)
         .animation(BtbMotion.smooth, value: model.homeTab)
         .onPreferenceChange(BarsHeightKey.self) { height in
             if height > 20 { barsHeight = height }

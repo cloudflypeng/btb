@@ -16,6 +16,9 @@ struct MobilePlayerView: View {
     /// Rotation is the app's own: the sheet rotates, and the video takes the
     /// whole screen while the phone is sideways (#7 rework).
     @Environment(\.verticalSizeClass) private var verticalSizeClass
+    /// Pulling the picture down moves the page toward the exit; no button sits
+    /// on the video any more.
+    @State private var dismissOffset: CGFloat = 0
 
     private var isLandscape: Bool { verticalSizeClass == .compact }
 
@@ -26,6 +29,10 @@ struct MobilePlayerView: View {
             Color.black
                 .ignoresSafeArea()
             page
+                .offset(y: dismissOffset)
+                // The page recedes as it is pulled away, so the drag reads as
+                // "this screen is leaving", not "the video is moving".
+                .scaleEffect(max(1 - dismissOffset / 4_000, 0.9))
         }
         .statusBarHidden(isLandscape)
         .onAppear { MobileOrientation.shared.setAllowsLandscape(true) }
@@ -71,7 +78,9 @@ struct MobilePlayerView: View {
                 video: video,
                 playback: playback,
                 thumbnails: thumbnails,
-                fillsScreen: isLandscape
+                fillsScreen: isLandscape,
+                dismissOffset: $dismissOffset,
+                onDismiss: closePlayer
             )
             .background(Color.black)
 
@@ -79,32 +88,12 @@ struct MobilePlayerView: View {
                 PlayerProgressLine(playback: playback)
                     .zIndex(2)
 
-                MobileVideoActionBar(video: video, detail: detail)
+                MobileVideoActionBar(video: video, detail: detail, playback: playback)
 
                 videoDetails
             }
         }
         .background(AppTheme.background(scheme))
-        // #8: the page is a full-screen cover now, so leaving it is this
-        // button — the video stops with it. It floats over the picture, as in
-        // YouTube, and is the only chrome the page keeps in landscape.
-        .overlay(alignment: .topLeading) {
-            Button(action: closePlayer) {
-                Image(systemName: "chevron.backward")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .frame(width: 36, height: 36)
-                    .background(.black.opacity(0.42), in: Circle())
-                    .contentShape(Circle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("返回")
-            // Landscape fills the screen edge to edge, so the button has to
-            // step in past the notch itself; portrait already sits inside the
-            // safe area under the status bar.
-            .padding(.leading, isLandscape ? MobileSafeArea.leading + 12 : 12)
-            .padding(.top, isLandscape ? MobileSafeArea.top + 10 : 8)
-        }
     }
 
     /// Leaves the page and ends the playback with it: no audio keeps running
@@ -462,6 +451,9 @@ struct MobileVideoPlayer: View {
     var thumbnails: VideoThumbnails?
     /// Landscape: the canvas takes the whole screen instead of its 16:9 slot.
     var fillsScreen = false
+    /// How far the page has been pulled down toward closing.
+    @Binding var dismissOffset: CGFloat
+    var onDismiss: () -> Void
 
     @Environment(AppModel.self) private var model
     @Environment(MobileRouter.self) private var router
@@ -470,7 +462,9 @@ struct MobileVideoPlayer: View {
         let canvas = MobilePlayerCanvas(
             playback: playback,
             isFullscreen: fillsScreen,
-            thumbnails: thumbnails
+            thumbnails: thumbnails,
+            dismissOffset: $dismissOffset,
+            onDismiss: onDismiss
         ) {
             toggleFullscreen()
         }
@@ -519,6 +513,8 @@ struct MobilePlayerCanvas: View {
     /// D2: scrub-bar frames; the preview draws inside the canvas so it stays
     /// above the video's own layer.
     var thumbnails: VideoThumbnails?
+    @Binding var dismissOffset: CGFloat
+    var onDismiss: () -> Void
     var onToggleFullscreen: () -> Void
 
     @Environment(AppModel.self) private var model
@@ -564,10 +560,14 @@ struct MobilePlayerCanvas: View {
                     guard playback.isReady else { return }
                     withAnimation(BtbMotion.snappy) { showControls.toggle() }
                     if showControls { scheduleControlsHide() }
-                }
+                },
+                allowsDismissDrag: !isFullscreen,
+                dismissOffset: $dismissOffset,
+                onDismiss: onDismiss
             )
+            .allowsHitTesting(!casting)
 
-            if playback.danmakuEnabled, playback.isReady {
+            if playback.danmakuEnabled, playback.isReady, !casting {
                 DanmakuOverlay(
                     player: playback.player,
                     items: playback.visibleDanmaku,
@@ -577,6 +577,10 @@ struct MobilePlayerCanvas: View {
                     speed: playback.danmakuSpeed,
                     fontScale: playback.danmakuFontScale
                 )
+            }
+
+            if casting {
+                castPanel
             }
 
             if let subtitle = playback.currentSubtitleText {
@@ -638,30 +642,6 @@ struct MobilePlayerCanvas: View {
                 controls
             }
 
-            if isFullscreen, showControls {
-                // Top-right, away from the page's back button: one leaves the
-                // page, the other only turns the phone back upright.
-                VStack {
-                    HStack {
-                        Spacer()
-                        Button {
-                            onToggleFullscreen()
-                        } label: {
-                            Image(systemName: "arrow.down.right.and.arrow.up.left")
-                                .font(.system(size: 15, weight: .bold))
-                                .foregroundStyle(.white)
-                                .frame(width: 36, height: 36)
-                                .background(.black.opacity(0.4), in: Circle())
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("退出全屏")
-                    }
-                    .padding(.trailing, MobileSafeArea.trailing + 16)
-                    .padding(.top, MobileSafeArea.top + 20)
-                    Spacer()
-                }
-            }
-
             // D2: the scrub preview sits on top of everything the canvas
             // draws, danmaku included, but only while the bar is held.
             if playback.isScrubbing, playback.duration > 0 {
@@ -707,6 +687,12 @@ struct MobilePlayerCanvas: View {
                 skip(15)
             }
             .accessibilityLabel("前进 15 秒")
+        }
+        // Tapping the gaps between the centre buttons must not pause.
+        .contentShape(Rectangle())
+        .onTapGesture {
+            showControls = true
+            scheduleControlsHide()
         }
     }
 
@@ -814,7 +800,76 @@ struct MobilePlayerCanvas: View {
                     endPoint: .bottom
                 )
             )
+            // The bar is a control surface: a tap on it (or on the space
+            // between its buttons) keeps the controls up instead of falling
+            // through to the picture's play/pause tap.
+            .contentShape(Rectangle())
+            .onTapGesture {
+                showControls = true
+                scheduleControlsHide()
+            }
         }
+    }
+
+    /// The picture is on a TV: the phone shows the remote instead.
+    private var casting: Bool { playback.isCasting || showFakeCast }
+
+    /// DEBUG only: cast has to be checked against a real AirPlay route, which
+    /// a simulator cannot provide. `-BTB_FAKE_CAST` draws the panel anyway.
+    private var showFakeCast: Bool {
+        #if DEBUG
+        ProcessInfo.processInfo.arguments.contains("-BTB_FAKE_CAST")
+        #else
+        false
+        #endif
+    }
+
+    /// The picture is on a TV, so the phone becomes the remote: where it is
+    /// playing, and the one control that matters — bringing it back.
+    private var castPanel: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "airplayvideo")
+                .font(.system(size: isFullscreen ? 40 : 30, weight: .light))
+                .foregroundStyle(.white.opacity(0.92))
+
+            Text(playback.castDeviceName.map { "正在投屏到 \($0)" } ?? "正在投屏")
+                .font(.system(size: isFullscreen ? 17 : 14, weight: .semibold))
+                .foregroundStyle(.white)
+
+            if let title = playback.video?.title, !title.isEmpty {
+                Text(title)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.white.opacity(0.58))
+                    .lineLimit(2)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 36)
+            }
+
+            Button {
+                playback.stopCasting()
+            } label: {
+                Text("停止投屏")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 18)
+                    .frame(height: 34)
+                    .background(.white.opacity(0.14), in: Capsule())
+                    .overlay(Capsule().strokeBorder(.white.opacity(0.2), lineWidth: 0.5))
+                    .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .padding(.top, 2)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.black)
+        // The picture's own tap layer is off while casting, so the panel takes
+        // over showing / hiding the controls — play and pause still drive the TV.
+        .contentShape(Rectangle())
+        .onTapGesture {
+            withAnimation(BtbMotion.snappy) { showControls.toggle() }
+            if showControls { scheduleControlsHide() }
+        }
+        .transition(.opacity)
     }
 
     private func autoplayCard(next: VideoItem, countdown: Int) -> some View {

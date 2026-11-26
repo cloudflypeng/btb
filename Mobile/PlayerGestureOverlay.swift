@@ -17,6 +17,12 @@ struct PlayerGestureOverlay: View {
     @Binding var isFill: Bool
     var onSingleTap: () -> Void
     var onDoubleTap: () -> Void
+    /// Portrait: the picture itself is the way out — drag it down, the page
+    /// follows the finger and closes past the threshold. Landscape keeps the
+    /// vertical drags for brightness and volume.
+    var allowsDismissDrag = false
+    @Binding var dismissOffset: CGFloat
+    var onDismiss: () -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -30,7 +36,7 @@ struct PlayerGestureOverlay: View {
     @State private var boostTask: Task<Void, Never>?
 
     private enum DragMode: Equatable {
-        case none, seek, brightness, volume
+        case none, seek, brightness, volume, dismiss
     }
 
     private struct HUD: Equatable {
@@ -50,7 +56,7 @@ struct PlayerGestureOverlay: View {
                 )
                 .simultaneousGesture(drag(in: geo.size))
                 .simultaneousGesture(magnify)
-                .onLongPressGesture(minimumDuration: 0.5, maximumDistance: 18) {
+                .onLongPressGesture(minimumDuration: 0.8, maximumDistance: 14) {
                 } onPressingChanged: { pressing in
                     handleBoostPressing(pressing)
                 }
@@ -78,6 +84,10 @@ struct PlayerGestureOverlay: View {
                         startValue = playback.currentTime
                         playback.isScrubbing = true
                         showControls = true
+                    } else if allowsDismissDrag {
+                        // Pull down on the picture to leave the page, as the
+                        // player page has no chrome of its own any more.
+                        mode = .dismiss
                     } else {
                         let leftHalf = value.startLocation.x < size.width / 2
                         mode = leftHalf ? .brightness : .volume
@@ -101,17 +111,30 @@ struct PlayerGestureOverlay: View {
                     let level = min(max(startValue + Double(value.translation.height) / -300, 0), 1)
                     SystemVolume.shared.set(Float(level))
                     hud = HUD(icon: level == 0 ? "speaker.slash.fill" : "speaker.wave.2.fill", text: "\(Int(level * 100))%")
+                case .dismiss:
+                    // Rubber-bands above the top, never drags up past it.
+                    let pull = max(value.translation.height, 0)
+                    dismissOffset = pull
                 case .none:
                     break
                 }
             }
-            .onEnded { _ in
+            .onEnded { value in
                 switch mode {
                 case .seek:
                     playback.finishScrub()
                     scheduleHUDHide()
                 case .brightness, .volume:
                     scheduleHUDHide()
+                case .dismiss:
+                    let pull = max(value.translation.height, 0)
+                    let projected = max(value.predictedEndTranslation.height, pull)
+                    if pull > 110 || projected > 240 {
+                        withAnimation(.easeIn(duration: 0.18)) { dismissOffset = 1_000 }
+                        onDismiss()
+                    } else {
+                        withAnimation(reduceMotion ? nil : BtbMotion.snappy) { dismissOffset = 0 }
+                    }
                 case .none:
                     break
                 }
@@ -121,13 +144,14 @@ struct PlayerGestureOverlay: View {
 
     // MARK: - Long press (2× while held)
 
-    /// A real 2× hold starts only after the finger has been still for half a
-    /// second, and always ends on release, so a drag can never leave it stuck on.
+    /// A real 2× hold starts only after the finger has been still for 0.8s
+    /// (long enough that a slow vertical swipe for volume never trips it),
+    /// and always ends on release, so a drag can never leave it stuck on.
     private func handleBoostPressing(_ pressing: Bool) {
         if pressing {
             boostTask?.cancel()
             boostTask = Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 500_000_000)
+                try? await Task.sleep(nanoseconds: 800_000_000)
                 guard !Task.isCancelled else { return }
                 startBoost()
             }
