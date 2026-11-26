@@ -549,17 +549,22 @@ struct MobilePlayerCanvas: View {
                 playback: playback,
                 showControls: $showControls,
                 isFill: $isFill,
+                // #6 (revised): one tap only brings the controls in or out;
+                // play / pause needs the deliberate double tap.
                 onSingleTap: {
                     guard playback.isReady else { return }
-                    // #6: a tap on the picture is play / pause.
-                    playback.togglePlayback()
-                    withAnimation(BtbMotion.snappy) { showControls = true }
-                    scheduleControlsHide()
+                    withAnimation(BtbMotion.snappy) { showControls.toggle() }
+                    if showControls {
+                        scheduleControlsHide()
+                    } else {
+                        hideControlsTask?.cancel()
+                    }
                 },
                 onDoubleTap: {
                     guard playback.isReady else { return }
-                    withAnimation(BtbMotion.snappy) { showControls.toggle() }
-                    if showControls { scheduleControlsHide() }
+                    playback.togglePlayback()
+                    withAnimation(BtbMotion.snappy) { showControls = true }
+                    scheduleControlsHide()
                 },
                 allowsDismissDrag: !isFullscreen,
                 dismissOffset: $dismissOffset,
@@ -917,8 +922,10 @@ struct MobilePlayerCanvas: View {
             showControls = true
             return
         }
+        // Playing: the picture is what matters, so the chrome leaves quickly.
+        // Paused: the guard above keeps it up until the user moves on.
         hideControlsTask = Task {
-            try? await Task.sleep(nanoseconds: 2_600_000_000)
+            try? await Task.sleep(nanoseconds: 1_600_000_000)
             guard !Task.isCancelled, playback.isPlaying, !playback.isScrubbing else { return }
             withAnimation(BtbMotion.snappy) {
                 showControls = false
