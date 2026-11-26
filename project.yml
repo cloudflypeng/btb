@@ -120,6 +120,11 @@ targets:
           - audio
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
+        # DLNA discovery: the core sends SSDP M-SEARCH on the local network.
+        NSLocalNetworkUsageDescription: BTB 需要访问本地网络，才能搜索到同一 WiFi 下的电视和投屏设备。
+        NSBonjourServices:
+          - _airplay._tcp
+          - _raop._tcp
     postBuildScripts:
       - name: Compile AppIcon
         basedOnDependencyAnalysis: false

@@ -8,6 +8,9 @@ struct MobileVideoActionBar: View {
     /// AirPlay state lives with playback, so the cast cell can show whether a
     /// route is connected.
     let playback: MobilePlaybackController
+    /// DLNA devices come from the core; the player page owns the session.
+    let cast: MobileCastController
+    var onCast: () -> Void
 
     @Environment(AppModel.self) private var model
     @Environment(\.colorScheme) private var scheme
@@ -34,9 +37,9 @@ struct MobileVideoActionBar: View {
             .buttonStyle(BtbPressableStyle(scale: 0.9))
         }
         .padding(.horizontal, 6)
-        // Slimmer than the old 40: the row is an icon strip now, and a shorter
-        // bar sits more evenly under the video.
-        .frame(height: 34)
+        // A slim icon strip: the icons are what carries the row, so the bar is
+        // barely taller than them and they sit exactly on its centre line.
+        .frame(height: 30)
         .background(AppTheme.background(scheme))
         .overlay(alignment: .bottom) {
             Rectangle().fill(AppTheme.divider(scheme)).frame(height: 0.5)
@@ -61,23 +64,17 @@ struct MobileVideoActionBar: View {
 
     // MARK: - AirPlay
 
-    /// Apple's route picker sits invisibly over our own icon: it is the only
-    /// way to open the device list, and it cannot be triggered from code.
+    /// Opens the cast sheet: the core's DLNA search is what reaches 云视听小
+    /// 电视 and the other TVs on the LAN, which AirPlay alone never could.
     private var castAction: some View {
-        ZStack {
+        Button(action: onCast) {
             ActionCell(
                 icon: "airplayvideo",
-                label: playback.isCasting
-                    ? "正在投屏到\(playback.castDeviceName ?? "电视")"
-                    : "投屏",
-                isActive: playback.isCasting
+                label: cast.target.map { "正在投屏到\($0.device.name)" } ?? "投屏",
+                isActive: cast.hasTarget
             )
-            .allowsHitTesting(false)
-
-            AirPlayRouteButton()
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(maxWidth: .infinity)
+        .buttonStyle(BtbPressableStyle(scale: 0.9, haptic: false))
     }
 
     // MARK: - Like (tap) / Triple (long press)
@@ -262,10 +259,10 @@ private struct ActionCell: View {
 
     var body: some View {
         Image(systemName: icon)
-            .font(.system(size: 18, weight: .regular))
+            .font(.system(size: 17, weight: .regular))
             .symbolEffect(.bounce, value: isActive)
             .contentTransition(.symbolEffect(.replace))
-            .frame(width: 30, height: 30)
+            .frame(width: 28, height: 28)
             .overlay {
                 Circle()
                     .trim(from: 0, to: progress)
@@ -276,7 +273,7 @@ private struct ActionCell: View {
             }
             .foregroundStyle(isActive ? AppTheme.brand : AppTheme.secondary(scheme))
             .frame(maxWidth: .infinity)
-            .frame(height: 34)
+            .frame(height: 30)
             .contentShape(Rectangle())
             .accessibilityLabel(label)
             .animation(BtbMotion.snappy, value: isActive)

@@ -12,6 +12,9 @@ final class MobileRouter {
     /// Bumped when the bottom tab that is already selected is tapped again
     /// (#3): the page jumps back to its top, as the YouTube tab does.
     var retapToken = 0
+    /// The bottom bar is off-screen: the feed owns the whole screen while it
+    /// scrolls down, exactly like the header.
+    var tabBarHidden = false
     var rootVideo: VideoItem?
     var path: [MobileSheetRoute] = []
 

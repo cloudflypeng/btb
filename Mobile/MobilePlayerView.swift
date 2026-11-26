@@ -19,6 +19,9 @@ struct MobilePlayerView: View {
     /// Pulling the picture down moves the page toward the exit; no button sits
     /// on the video any more.
     @State private var dismissOffset: CGFloat = 0
+    /// DLNA casting: discovery, the session, and the sheet that drives them.
+    @State private var cast = MobileCastController()
+    @State private var isCastSheetPresented = false
 
     private var isLandscape: Bool { verticalSizeClass == .compact }
 
@@ -45,6 +48,10 @@ struct MobilePlayerView: View {
             btbDebugLog("detail: task bvid=\(video.bvid)")
             #endif
             isCommentsExpanded = false
+            cast.attach(core: model.core)
+            playback.onStopCast = {
+                Task { await cast.stop(playback: playback) }
+            }
             model.openVideo(video)
             await playback.load(video: video, model: model)
             await model.loadDownloads()
@@ -66,7 +73,22 @@ struct MobilePlayerView: View {
             #if DEBUG
             btbDebugLog("detail: disappear bvid=\(video.bvid)")
             #endif
+            // The TV stream is served through this process, so leaving the page
+            // ends the session rather than leaving the phone holding it.
+            if cast.hasTarget {
+                let target = cast
+                Task { await target.stop(playback: playback) }
+            }
             model.closeVideo(bvid: video.bvid)
+        }
+        .sheet(isPresented: $isCastSheetPresented) {
+            MobileCastSheet(
+                video: video,
+                playback: playback,
+                cast: cast
+            ) {
+                isCastSheetPresented = false
+            }
         }
     }
 
@@ -88,7 +110,14 @@ struct MobilePlayerView: View {
                 PlayerProgressLine(playback: playback)
                     .zIndex(2)
 
-                MobileVideoActionBar(video: video, detail: detail, playback: playback)
+                MobileVideoActionBar(
+                    video: video,
+                    detail: detail,
+                    playback: playback,
+                    cast: cast
+                ) {
+                    isCastSheetPresented = true
+                }
 
                 videoDetails
             }

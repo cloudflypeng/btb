@@ -40,37 +40,58 @@ struct MobileRootView: View {
         @Bindable var model = model
         @Bindable var router = router
 
-        TabView(selection: tabSelection) {
-            NavigationStack {
-                MobileHomeView()
-            }
-            .tabItem { Label("首页", systemImage: "house.fill") }
-            .tag(MobileTab.home)
+        // The system tab bar is hidden for good: `MobileTabBar` draws the same
+        // bar as an ordinary view so it can slide off with the header.
+        ZStack(alignment: .bottom) {
+            TabView(selection: tabSelection) {
+                NavigationStack {
+                    MobileHomeView()
+                }
+                .toolbar(.hidden, for: .tabBar)
+                .tag(MobileTab.home)
 
-            NavigationStack {
-                MobileDynamicView()
-            }
-            .tabItem { Label("动态", systemImage: "bolt.horizontal.fill") }
-            .tag(MobileTab.dynamic)
+                NavigationStack {
+                    MobileDynamicView()
+                }
+                .toolbar(.hidden, for: .tabBar)
+                .tag(MobileTab.dynamic)
 
-            NavigationStack {
-                MobileDiscoverView()
-            }
-            .tabItem { Label("发现", systemImage: "safari.fill") }
-            .tag(MobileTab.discover)
+                NavigationStack {
+                    MobileDiscoverView()
+                }
+                .toolbar(.hidden, for: .tabBar)
+                .tag(MobileTab.discover)
 
-            NavigationStack {
-                MobileMessageView()
-            }
-            .tabItem { Label("消息", systemImage: "bell.fill") }
-            .badge(model.messageUnread?.total ?? 0)
-            .tag(MobileTab.messages)
+                NavigationStack {
+                    MobileMessageView()
+                }
+                .toolbar(.hidden, for: .tabBar)
+                .tag(MobileTab.messages)
 
-            NavigationStack {
-                MobileProfileView()
+                NavigationStack {
+                    MobileProfileView()
+                }
+                .toolbar(.hidden, for: .tabBar)
+                .tag(MobileTab.profile)
             }
-            .tabItem { Label("我的", systemImage: "person.crop.circle") }
-            .tag(MobileTab.profile)
+            // Room for the bar, reserved whether or not it is showing, so the
+            // feed never re-lays out when it leaves.
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                Color.clear.frame(height: 58)
+            }
+
+            MobileTabBar(
+                selection: router.selectedTab,
+                badge: model.messageUnread?.total ?? 0,
+                hidden: router.tabBarHidden
+            ) { tab in
+                if tab == router.selectedTab {
+                    router.retapToken += 1
+                } else {
+                    router.selectedTab = tab
+                }
+            }
+            .padding(.bottom, 4)
         }
         .tint(AppTheme.text(scheme))
         .background(AppTheme.background(scheme))

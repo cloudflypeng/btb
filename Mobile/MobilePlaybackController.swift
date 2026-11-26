@@ -18,9 +18,11 @@ final class MobilePlaybackController: NSObject {
     private(set) var currentTime: Double = 0
     private(set) var duration: Double = 0
     private(set) var isPlaying = false
-    /// True while the picture is playing on an AirPlay device instead of the phone.
+    /// True while the picture is playing on another screen (AirPlay or DLNA).
     private(set) var isCasting = false
     private(set) var castDeviceName: String?
+    /// Set by the player page: ends a DLNA session in the core.
+    @ObservationIgnored var onStopCast: (() -> Void)?
     private(set) var didReachEnd = false
     var isScrubbing = false {
         didSet {
@@ -609,29 +611,41 @@ final class MobilePlaybackController: NSObject {
         }
     }
 
-    private func updateCasting(_ active: Bool) {
-        guard active != isCasting else { return }
-        isCasting = active
+    /// Marks the picture as playing somewhere else. Both a DLNA session (the
+    /// TV pulls the stream) and an AirPlay route end up here, so the canvas
+    /// only needs the one flag.
+    func setCasting(_ active: Bool, deviceName: String?) {
         if active {
-            let outputs = AVAudioSession.sharedInstance().currentRoute.outputs
-            castDeviceName = outputs.first(where: { $0.portType == .airPlay })?.portName
-                ?? outputs.first?.portName
-            #if DEBUG
-            btbDebugLog("cast: started device=\(castDeviceName ?? "?")")
-            #endif
+            isCasting = true
+            castDeviceName = deviceName
         } else {
+            guard isCasting else { return }
+            isCasting = false
             castDeviceName = nil
-            #if DEBUG
-            btbDebugLog("cast: stopped")
-            #endif
         }
+        #if DEBUG
+        btbDebugLog("cast: \(active ? "started device=\(deviceName ?? "?")" : "stopped")")
+        #endif
     }
 
-    /// Brings the picture back to the phone. Turning external playback off is
-    /// what actually drops the AirPlay route; it is re-allowed a moment later
-    /// so the button keeps working.
+    private func updateCasting(_ active: Bool) {
+        guard active != isCasting else { return }
+        guard active else {
+            setCasting(false, deviceName: nil)
+            return
+        }
+        let outputs = AVAudioSession.sharedInstance().currentRoute.outputs
+        let name = outputs.first(where: { $0.portType == .airPlay })?.portName
+            ?? outputs.first?.portName
+        setCasting(true, deviceName: name)
+    }
+
+    /// Brings the picture back to the phone. A DLNA session is stopped by the
+    /// hook the player page installs; an AirPlay route is dropped by turning
+    /// external playback off (and re-allowing it a moment later).
     func stopCasting() {
-        guard let player else { return }
+        onStopCast?()
+        guard let player, player.isExternalPlaybackActive else { return }
         player.allowsExternalPlayback = false
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 1_200_000_000)
