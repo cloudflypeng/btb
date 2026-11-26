@@ -163,6 +163,7 @@ struct MobileHomeView: View {
     /// Cards stagger in only while the first screen settles; afterwards the
     /// list must appear instantly as it is scrolled.
     @State private var entranceActive = true
+    @Environment(MobileRouter.self) private var router
 
     private var tabKey: String { model.homeSnapshotKey }
 
@@ -191,6 +192,11 @@ struct MobileHomeView: View {
         }
         .onChange(of: currentTopID) { _, newValue in
             topIDs[tabKey] = newValue
+        }
+        // #3: re-tapping the selected bottom tab brings the feed back to the
+        // top, the way YouTube's home tab does.
+        .onChange(of: router.retapToken) { _, _ in
+            scrollToTopAndRefresh()
         }
         .onChange(of: tabKey) { _, _ in
             currentTopID = topIDs[tabKey]

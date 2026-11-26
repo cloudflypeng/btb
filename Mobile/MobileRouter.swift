@@ -9,6 +9,9 @@ enum MobileSheetRoute: Hashable {
 final class MobileRouter {
     var selectedTab: MobileTab = .home
     var isPlayerPresented = false
+    /// Bumped when the bottom tab that is already selected is tapped again
+    /// (#3): the page jumps back to its top, as the YouTube tab does.
+    var retapToken = 0
     var rootVideo: VideoItem?
     var path: [MobileSheetRoute] = []
 

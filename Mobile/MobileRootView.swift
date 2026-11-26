@@ -23,11 +23,24 @@ struct MobileRootView: View {
     @State private var didOpenDebugVideo = false
 #endif
 
+    /// A tab that is already selected reports a re-tap instead of a switch.
+    private var tabSelection: Binding<MobileTab> {
+        Binding(
+            get: { router.selectedTab },
+            set: { tab in
+                if tab == router.selectedTab {
+                    router.retapToken += 1
+                }
+                router.selectedTab = tab
+            }
+        )
+    }
+
     var body: some View {
         @Bindable var model = model
         @Bindable var router = router
 
-        TabView(selection: $router.selectedTab) {
+        TabView(selection: tabSelection) {
             NavigationStack {
                 MobileHomeView()
             }
