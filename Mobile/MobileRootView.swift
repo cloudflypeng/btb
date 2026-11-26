@@ -18,6 +18,7 @@ struct MobileRootView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.colorScheme) private var scheme
     @State private var router = MobileRouter()
+    @Namespace private var playerTransition
 #if DEBUG
     @State private var didOpenDebugVideo = false
 #endif
@@ -61,6 +62,7 @@ struct MobileRootView: View {
         .tint(AppTheme.text(scheme))
         .background(AppTheme.background(scheme))
         .environment(router)
+        .environment(\.playerTransitionNamespace, playerTransition)
         .overlay(alignment: .bottom) {
             if let toast = model.toastMessage {
                 Text(toast)
@@ -92,6 +94,7 @@ struct MobileRootView: View {
             }
             .environment(model)
             .environment(router)
+            .modifier(PlayerZoomTransition(bvid: router.rootVideo?.bvid, namespace: playerTransition))
             .presentationDetents([.large])
             .presentationDragIndicator(.visible)
             .presentationCornerRadius(16)
