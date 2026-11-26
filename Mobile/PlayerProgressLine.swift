@@ -15,6 +15,10 @@ struct PlayerProgressLine: View {
         return min(max(seconds / playback.duration, 0), 1)
     }
 
+    private var chapters: [PlaybackChapter] {
+        playback.duration > 0 ? playback.resolved?.chapterList ?? [] : []
+    }
+
     var body: some View {
         GeometryReader { geo in
             ZStack(alignment: .leading) {
@@ -25,6 +29,18 @@ struct PlayerProgressLine: View {
                     .frame(width: geo.size.width * fraction)
             }
             .frame(height: 3)
+            // D2: chapter starts, so a long video shows where its sections
+            // begin while the bar is being dragged.
+            .overlay(alignment: .leading) {
+                ForEach(chapters) { chapter in
+                    if chapter.from > 0, chapter.from < playback.duration {
+                        Rectangle()
+                            .fill(.black.opacity(0.45))
+                            .frame(width: 1)
+                            .offset(x: geo.size.width * chapter.from / playback.duration)
+                    }
+                }
+            }
             // Flush with the video above it: the whole 16pt strip is touch
             // area, but the visible line sits on its top edge (no gap).
             .frame(maxHeight: .infinity, alignment: .top)
@@ -68,7 +84,9 @@ struct ScrubPreview: View {
     var body: some View {
         GeometryReader { geo in
             let image = thumbnails?.image(at: playback.scrubTime)
-            let height = cardHeight(image)
+            let chapter = chapterTitle
+            let labelHeight = chapter == nil ? 18.0 : 32.0
+            let height = cardHeight(image, labelHeight: labelHeight)
             let fraction = playback.duration > 0
                 ? min(max(playback.scrubTime / playback.duration, 0), 1)
                 : 0
@@ -76,7 +94,7 @@ struct ScrubPreview: View {
                 max(geo.size.width * CGFloat(fraction), cardWidth / 2),
                 max(geo.size.width - cardWidth / 2, cardWidth / 2)
             )
-            card(image: image, height: height)
+            card(image: image, height: height, labelHeight: labelHeight, chapter: chapter)
                 .frame(width: cardWidth, height: height)
                 .position(x: center, y: max(geo.size.height - height / 2 - gap, height / 2))
         }
@@ -84,12 +102,20 @@ struct ScrubPreview: View {
         .accessibilityHidden(true)
     }
 
-    private func cardHeight(_ image: CGImage?) -> CGFloat {
-        let aspect = image.map { CGFloat($0.height) / CGFloat(max($0.width, 1)) } ?? (9.0 / 16.0)
-        return cardWidth * aspect + 18
+    /// The chapter the finger is over, when the uploader marked any.
+    private var chapterTitle: String? {
+        guard playback.duration > 0 else { return nil }
+        return playback.resolved?.chapterList.first { chapter in
+            playback.scrubTime >= chapter.from && playback.scrubTime < chapter.to
+        }?.title
     }
 
-    private func card(image: CGImage?, height: CGFloat) -> some View {
+    private func cardHeight(_ image: CGImage?, labelHeight: CGFloat) -> CGFloat {
+        let aspect = image.map { CGFloat($0.height) / CGFloat(max($0.width, 1)) } ?? (9.0 / 16.0)
+        return cardWidth * aspect + labelHeight
+    }
+
+    private func card(image: CGImage?, height: CGFloat, labelHeight: CGFloat, chapter: String?) -> some View {
         VStack(spacing: 0) {
             ZStack {
                 Color(white: 0.18)
@@ -99,14 +125,22 @@ struct ScrubPreview: View {
                         .aspectRatio(contentMode: .fill)
                 }
             }
-            .frame(width: cardWidth, height: height - 18)
+            .frame(width: cardWidth, height: height - labelHeight)
             .clipped()
-            Text(timeLabel(playback.scrubTime))
-                .font(.system(size: 11, weight: .semibold).monospacedDigit())
-                .foregroundStyle(.white)
-                .frame(maxWidth: .infinity)
-                .frame(height: 18)
-                .background(.black.opacity(0.72))
+            VStack(spacing: 1) {
+                if let chapter {
+                    Text(chapter)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.72))
+                        .lineLimit(1)
+                }
+                Text(timeLabel(playback.scrubTime))
+                    .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                    .foregroundStyle(.white)
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: labelHeight)
+            .background(.black.opacity(0.72))
         }
         .frame(width: cardWidth)
         .background(Color.black)

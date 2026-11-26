@@ -71,6 +71,20 @@ struct PlaybackSubtitle: Decodable, Identifiable, Hashable {
     }
 }
 
+struct PlaybackChapter: Decodable, Identifiable, Hashable {
+    let from: Double
+    let to: Double
+    let title: String
+
+    var id: Double { from }
+
+    enum CodingKeys: String, CodingKey {
+        case from
+        case to
+        case title
+    }
+}
+
 struct PlayerResolveResult: Decodable {
     let bvid: String
     let aid: Int64?
@@ -83,6 +97,8 @@ struct PlayerResolveResult: Decodable {
     let qualities: [PlaybackQuality]
     let audio: [PlaybackAudio]
     let subtitles: [PlaybackSubtitle]
+    /// Uploader-provided chapters; most videos have none.
+    let chapters: [PlaybackChapter]?
     let resumeMS: Int64?
     let lastPlayCID: Int64?
     let defaultQN: Int64?
@@ -92,6 +108,7 @@ struct PlayerResolveResult: Decodable {
 
     var canPlay: Bool { playable ?? !qualities.isEmpty }
     var resumeSeconds: Double { Double(resumeMS ?? 0) / 1000 }
+    var chapterList: [PlaybackChapter] { chapters ?? [] }
 
     enum CodingKeys: String, CodingKey {
         case bvid
@@ -105,6 +122,7 @@ struct PlayerResolveResult: Decodable {
         case qualities
         case audio
         case subtitles
+        case chapters
         case resumeMS = "resume_ms"
         case lastPlayCID = "last_play_cid"
         case defaultQN = "default_qn"
