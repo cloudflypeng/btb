@@ -114,6 +114,27 @@ struct PlayerResolveResult: Decodable {
     }
 }
 
+extension PlayerResolveResult {
+    /// The rendition a new playback should start with: the highest quality at
+    /// or below the user's ceiling, preferring their codec.
+    ///
+    /// Shared by the player and the touch-down prewarm, which must agree — a
+    /// mismatch means the prefetched stream is thrown away.
+    func preferredQuality(defaultQN: Int64, defaultCodec: String) -> PlaybackQuality? {
+        let target = min(self.defaultQN ?? defaultQN, defaultQN)
+        let sorted = qualities.sorted { $0.qn > $1.qn }
+        let eligible = sorted.filter { $0.qn <= target }
+        let preferredCodec = self.defaultCodec ?? defaultCodec
+        if let best = eligible.first {
+            if let exact = eligible.first(where: { $0.qn == best.qn && $0.codec == preferredCodec }) {
+                return exact
+            }
+            return best
+        }
+        return sorted.first
+    }
+}
+
 struct SubtitleVTTResponse: Decodable {
     let vtt: String
     let cueCount: Int?

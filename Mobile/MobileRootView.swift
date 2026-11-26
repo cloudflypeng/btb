@@ -146,9 +146,21 @@ struct MobileRootView: View {
     }
 
     private func openDebugVideoIfNeeded() {
-        guard !didOpenDebugVideo,
-              model.coreState == .ready,
-              let bvid = debugOption("BTB_MOBILE_OPEN_BVID"),
+        guard !didOpenDebugVideo, model.coreState == .ready else { return }
+        // Replays press → open on the real router, so tap-to-first-frame can be
+        // measured on a device via `devicectl device process launch --console`.
+        if debugOption("BTB_AUTO_OPEN") == "1", let first = model.videos.first {
+            didOpenDebugVideo = true
+            let pressMS = UInt64(Int(debugOption("BTB_AUTO_OPEN_DELAY") ?? "") ?? 500)
+            model.prefetchPlayback(first)
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: pressMS * 1_000_000)
+                Perf.milestone("autoOpen.tap", "press=\(pressMS) ms")
+                router.open(first)
+            }
+            return
+        }
+        guard let bvid = debugOption("BTB_MOBILE_OPEN_BVID"),
               !bvid.isEmpty else {
             return
         }

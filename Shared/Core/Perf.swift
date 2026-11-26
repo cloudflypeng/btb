@@ -47,5 +47,21 @@ enum Perf {
             + Double(elapsed.components.attoseconds) / 1e15
         signposter.emitEvent("metric", "\(name, privacy: .public) \(ms, format: .fixed(precision: 1)) ms")
         log.notice("perf: \(name, privacy: .public) \(ms, format: .fixed(precision: 1), privacy: .public) ms \(detail, privacy: .public)")
+        #if DEBUG
+        // `devicectl device process launch --console` only forwards stdout,
+        // which is how metrics are read off a physical device. Unbuffered so a
+        // kill never swallows the tail of a run.
+        print("perf: \(name) \(String(format: "%.1f", ms)) ms \(detail)")
+        fflush(stdout)
+        #endif
     }
 }
+
+#if DEBUG
+/// Debug-only line to stdout, flushed immediately for device log capture.
+@inline(__always)
+func btbDebugLog(_ message: @autoclosure () -> String) {
+    print(message())
+    fflush(stdout)
+}
+#endif

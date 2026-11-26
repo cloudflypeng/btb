@@ -79,7 +79,10 @@ final class MobilePlaybackController: NSObject {
     @ObservationIgnored private weak var model: AppModel?
     @ObservationIgnored private let defaultQN: Int
     @ObservationIgnored private let defaultCodec: String
-    @ObservationIgnored private var statusTask: Task<Void, Never>?
+    /// KVO on `AVPlayerItem.status`; polling cost ~100ms of first-frame latency.
+    @ObservationIgnored private var statusObservation: NSKeyValueObservation?
+    @ObservationIgnored private var readyWatchdog: Task<Void, Never>?
+    @ObservationIgnored private var firstFrameWatchdog: Task<Void, Never>?
     @ObservationIgnored private var monitorTask: Task<Void, Never>?
     @ObservationIgnored private var progressTask: Task<Void, Never>?
     @ObservationIgnored private var autoplayTask: Task<Void, Never>?
@@ -223,18 +226,29 @@ final class MobilePlaybackController: NSObject {
         }
 
         do {
-            let result = try await model.resolvePlayback(
-                for: video,
-                page: 1,
-                qn: Int64(defaultQN),
-                codec: defaultCodec,
-                cid: video.cid.map(Int64.init)
-            )
+            let qn = Int64(defaultQN)
+            Perf.begin("play.resolve")
+            let result: PlayerResolveResult
+            if let warm = await model.prewarmedResolve(for: video) {
+                // B1: touch-down on the card already resolved this video.
+                result = warm
+                Perf.end("play.resolve", "source=prewarm")
+            } else {
+                result = try await model.resolvePlayback(
+                    for: video,
+                    page: 1,
+                    qn: qn,
+                    codec: defaultCodec,
+                    cid: video.cid.map(Int64.init)
+                )
+                Perf.end("play.resolve", "source=network")
+            }
             guard !Task.isCancelled, self.video?.bvid == video.bvid else { return }
             resolved = result
             duration = Double(result.durationMS ?? 0) / 1000
 
-            guard result.canPlay, let quality = preferredQuality(from: result) else {
+            guard result.canPlay,
+                  let quality = result.preferredQuality(defaultQN: qn, defaultCodec: defaultCodec) else {
                 isLoading = false
                 errorMessage = result.isPreview == true ? "当前视频为预览片段，暂不可播放" : "当前视频暂不可播放"
                 return
@@ -248,23 +262,43 @@ final class MobilePlaybackController: NSObject {
             isLoading = false
             isReady = false
             errorMessage = playbackMessage(error)
+            #if DEBUG
+            btbDebugLog("play: prepare failed \(error)")
+            #endif
         }
     }
 
     private func load(quality: PlaybackQuality, startAt: Double, autoplay: Bool) async throws {
         guard let model, let resolved else { throw BBCoreError.invalidResponse }
-        statusTask?.cancel()
-        statusTask = nil
+        clearStatusObservation()
         removeEndObserver()
         let oldSession = sessionID
         player?.pause()
 
-        let stream = try await model.startStream(
+        let codec = quality.codec ?? "hevc"
+        Perf.begin("play.stream")
+        let stream: StreamSession
+        if let warm = await model.prewarmedStream(
             bvid: resolved.bvid,
             cid: resolved.cid,
             qn: quality.qn,
-            codec: quality.codec ?? "hevc"
-        )
+            codec: codec
+        ) {
+            // B1: prepared while the finger was down, or joined mid-flight.
+            stream = warm
+            Perf.end("play.stream", "source=prewarm qn=\(quality.qn)")
+        } else {
+            stream = try await model.startStream(
+                bvid: resolved.bvid,
+                cid: resolved.cid,
+                qn: quality.qn,
+                codec: codec
+            )
+            Perf.end("play.stream", "qn=\(quality.qn)")
+        }
+        #if DEBUG
+        btbDebugLog("play: stream ready session=\(stream.sessionID) cancelled=\(Task.isCancelled) url=\(stream.masterURL)")
+        #endif
         guard !Task.isCancelled else {
             await model.stopStream(sessionID: stream.sessionID)
             return
@@ -291,6 +325,9 @@ final class MobilePlaybackController: NSObject {
         newPlayer.defaultRate = Float(playbackRate)
         player = newPlayer
         sessionID = stream.sessionID
+        #if DEBUG
+        btbDebugLog("play: created player for \(url.absoluteString) session=\(stream.sessionID)")
+        #endif
         watch(item: item, seekTo: startAt, autoplay: autoplay)
 
         if let oldSession {
@@ -298,44 +335,109 @@ final class MobilePlaybackController: NSObject {
         }
     }
 
+    /// Waits for the item to become playable via KVO (B2). Polling
+    /// `AVPlayerItem.status` every 200 ms added ~100 ms of average delay.
     private func watch(item: AVPlayerItem, seekTo: Double, autoplay: Bool) {
-        statusTask = Task { @MainActor in
-            for _ in 0..<100 {
-                try? await Task.sleep(nanoseconds: 200_000_000)
-                if Task.isCancelled { return }
-                guard player?.currentItem === item else { return }
-                if item.status == .readyToPlay {
-                    if seekTo > 1 {
-                        await seek(to: seekTo)
-                    }
-                    isLoading = false
-                    isReady = true
-                    didReachEnd = false
-                    Perf.end("video.firstFrame", "platform=ios")
-                    if autoplay {
-                        player?.play()
-                        applyRate()
-                        isPlaying = true
-                    }
-                    reportProgress(event: seekTo > 1 ? "seek" : "start", seconds: seekTo)
-                    observeEnd(of: item)
-                    return
-                }
-                if item.status == .failed {
-                    player?.pause()
-                    isLoading = false
-                    isReady = false
-                    errorMessage = "视频加载失败，请稍后重试"
-                    return
-                }
-            }
-            if !Task.isCancelled, item.status != .readyToPlay {
-                player?.pause()
-                isLoading = false
-                isReady = false
-                errorMessage = "视频加载超时，请重试"
+        clearStatusObservation()
+        isLoading = true
+        // Ask AVPlayer to start on a thin cushion instead of its multi-second
+        // default; the buffer is widened again once the first frame is up.
+        item.preferredForwardBufferDuration = 1.0
+        Perf.begin("play.buffer")
+
+        let token = ObjectIdentifier(item)
+        #if DEBUG
+        btbDebugLog("play: watch begin status=\(item.status.rawValue)")
+        #endif
+        statusObservation = item.observe(\.status, options: [.initial, .new]) { [weak self] observed, _ in
+            let status = observed.status
+            #if DEBUG
+            btbDebugLog("play: kvo raw status=\(status.rawValue)")
+            #endif
+            Task { @MainActor [weak self] in
+                self?.handleItemStatus(status, token: token, seekTo: seekTo, autoplay: autoplay)
             }
         }
+
+        readyWatchdog = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 25_000_000_000)
+            guard !Task.isCancelled, let self, !self.isReady, self.errorMessage == nil else { return }
+            self.player?.pause()
+            self.isLoading = false
+            self.errorMessage = "视频加载超时，请重试"
+        }
+    }
+
+    private func handleItemStatus(
+        _ status: AVPlayerItem.Status,
+        token: ObjectIdentifier,
+        seekTo: Double,
+        autoplay: Bool
+    ) {
+        #if DEBUG
+        btbDebugLog("play: item status=\(status.rawValue)")
+        #endif
+        guard let player,
+              let item = player.currentItem,
+              ObjectIdentifier(item) == token else {
+            #if DEBUG
+            btbDebugLog("play: status ignored (stale item)")
+            #endif
+            return
+        }
+        switch status {
+        case .readyToPlay:
+            readyWatchdog?.cancel()
+            readyWatchdog = nil
+            clearStatusObservation()
+            Perf.end("play.buffer")
+            isLoading = false
+            didReachEnd = false
+            reportProgress(event: seekTo > 1 ? "seek" : "start", seconds: seekTo)
+            observeEnd(of: item)
+            if autoplay {
+                if seekTo > 1 {
+                    player.seek(to: CMTime(seconds: seekTo, preferredTimescale: 600))
+                    currentTime = seekTo
+                }
+                player.playImmediately(atRate: Float(playbackRate))
+                isPlaying = true
+            }
+            // The video frame is now arriving; if the surface never reports
+            // (PiP, offscreen), reveal the player anyway instead of hanging.
+            firstFrameWatchdog?.cancel()
+            firstFrameWatchdog = Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                guard !Task.isCancelled else { return }
+                self?.markSurfaceReady(source: "timeout")
+            }
+        case .failed:
+            readyWatchdog?.cancel()
+            readyWatchdog = nil
+            clearStatusObservation()
+            player.pause()
+            isLoading = false
+            isReady = false
+            errorMessage = "视频加载失败，请稍后重试"
+            #if DEBUG
+            btbDebugLog("play: item failed \(String(describing: item.error))")
+            #endif
+        default:
+            break
+        }
+    }
+
+    /// Called by the video surface once `AVPlayerLayer.isReadyForDisplay`
+    /// flips: the first real frame is on screen (B2).
+    func markSurfaceReady(source: String = "layer") {
+        guard !isReady else { return }
+        guard player != nil else { return }
+        firstFrameWatchdog?.cancel()
+        firstFrameWatchdog = nil
+        // Keep a deeper cushion now that startup is over.
+        player?.currentItem?.preferredForwardBufferDuration = 6.0
+        isReady = true
+        Perf.end("video.firstFrame", "platform=ios source=\(source)")
     }
 
     func switchQuality(_ quality: PlaybackQuality) async {
@@ -491,6 +593,8 @@ final class MobilePlaybackController: NSObject {
         if isReady, !didReachEnd {
             reportProgress(event: "pause", seconds: currentTime)
         }
+        model?.playbackProgress.flush()
+        model?.discardPlaybackPrewarm()
         if let interruptionObserver {
             NotificationCenter.default.removeObserver(interruptionObserver)
             self.interruptionObserver = nil
@@ -511,12 +615,18 @@ final class MobilePlaybackController: NSObject {
     }
 
     private func teardownPlayer() {
-        statusTask?.cancel()
-        statusTask = nil
+        clearStatusObservation()
         removeEndObserver()
         player?.pause()
         player = nil
         sessionID = nil
+    }
+
+    private func clearStatusObservation() {
+        readyWatchdog?.cancel()
+        readyWatchdog = nil
+        statusObservation?.invalidate()
+        statusObservation = nil
     }
 
     private func observeEnd(of item: AVPlayerItem) {
@@ -612,7 +722,18 @@ final class MobilePlaybackController: NSObject {
     }
 
     private func reportProgress(event: String, seconds: Double) {
-        guard let model, let video, let resolved, isReady || event == "end" else { return }
+        guard let model, let video, let resolved else { return }
+        // B4: remember the position locally on every report we already send,
+        // so cards can show a progress bar and resume works offline.
+        if event != "end" || duration > 0 {
+            model.playbackProgress.record(
+                bvid: video.bvid,
+                cid: resolved.cid,
+                seconds: event == "end" ? max(duration, 0) : seconds,
+                duration: duration
+            )
+        }
+        guard isReady || event == "end" else { return }
         let milliseconds = Int64(max(seconds, 0) * 1000)
         Task {
             await model.reportPlaybackProgress(
@@ -707,24 +828,13 @@ final class MobilePlaybackController: NSObject {
         }
     }
 
-    private func preferredQuality(from result: PlayerResolveResult) -> PlaybackQuality? {
-        let setting = Int64(defaultQN)
-        let target = min(result.defaultQN ?? setting, setting)
-        let sorted = result.qualities.sorted { $0.qn > $1.qn }
-        let eligible = sorted.filter { $0.qn <= target }
-        let preferredCodec = result.defaultCodec ?? defaultCodec
-        if let best = eligible.first {
-            if let exact = eligible.first(where: { $0.qn == best.qn && $0.codec == preferredCodec }) {
-                return exact
-            }
-            return best
-        }
-        return sorted.first
-    }
-
+    /// Resume point when a video opens: the further of the cloud history and
+    /// the position this device remembers (B4).
     private func initialResume(from result: PlayerResolveResult) -> Double {
-        let resume = result.resumeSeconds
         let total = Double(result.durationMS ?? 0) / 1000
+        let cloud = result.resumeSeconds
+        let local = model?.playbackProgress.resumeSeconds(for: result.bvid, cid: result.cid) ?? 0
+        let resume = max(cloud, local)
         guard resume > 3 else { return 0 }
         guard total <= 0 || resume < total - 2 else { return 0 }
         return resume

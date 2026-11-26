@@ -37,7 +37,8 @@ struct InlinePlayerView: View {
     @State private var isReady = false
     @State private var isSwitchingQuality = false
     @State private var errorMessage: String?
-    @State private var statusTask: Task<Void, Never>?
+    @State private var statusObservation: NSKeyValueObservation?
+    @State private var readyWatchdog: Task<Void, Never>?
     @State private var progressTask: Task<Void, Never>?
     @State private var isPreparing = false
 
@@ -861,8 +862,7 @@ struct InlinePlayerView: View {
         scrubTime = 0
         showControls = true
         didReachEnd = false
-        statusTask?.cancel()
-        statusTask = nil
+        clearStatusObservation()
         player?.pause()
         player = nil
         if let oldSession = session {
@@ -936,8 +936,7 @@ struct InlinePlayerView: View {
     }
 
     private func load(quality: PlaybackQuality, startAt: Double, autoplay: Bool) async throws {
-        statusTask?.cancel()
-        statusTask = nil
+        clearStatusObservation()
         guard let resolved else { throw BBCoreError.invalidResponse }
         let oldSession = session
         let oldPlayer = player
@@ -1082,51 +1081,82 @@ struct InlinePlayerView: View {
         return sorted.first
     }
 
+    /// Cloud history merged with this Mac's local mark (B4).
     private func initialResume(from result: PlayerResolveResult) -> Double {
-        let resume = result.resumeSeconds
         let total = Double(result.durationMS ?? 0) / 1000
+        let local = model.playbackProgress.resumeSeconds(for: result.bvid, cid: result.cid)
+        let resume = max(result.resumeSeconds, local)
         guard resume > 3 else { return 0 }
         guard total <= 0 || resume < total - 2 else { return 0 }
         return resume
     }
 
+    /// KVO instead of a 200 ms poll — the poll cost ~100 ms of first-frame delay (B2).
     private func watch(item: AVPlayerItem, seekTo: Double, autoplay: Bool) {
-        statusTask = Task { @MainActor in
-            for _ in 0..<100 {
-                try? await Task.sleep(nanoseconds: 200_000_000)
-                if Task.isCancelled { return }
-                guard player?.currentItem === item else { return }
-                if item.status == .readyToPlay {
-                    if seekTo > 1 {
-                        await seek(player: player, to: seekTo)
-                    }
-                    isLoading = false
-                    isReady = true
-                    isSwitchingQuality = false
-                    Perf.end("video.firstFrame", "platform=mac")
-                    if autoplay {
-                        player?.play()
-                        player?.rate = Float(playbackRate)
-                        isPlaying = true
-                    }
-                    reportProgress(event: seekTo > 1 ? "seek" : "start", seconds: seekTo)
-                    return
-                }
-                if item.status == .failed {
-                    player?.pause()
-                    isLoading = false
-                    isSwitchingQuality = false
-                    errorMessage = "视频加载失败，请稍后重试"
-                    return
-                }
-            }
-            if !Task.isCancelled, item.status != .readyToPlay {
-                player?.pause()
-                isLoading = false
-                isSwitchingQuality = false
-                errorMessage = "视频加载超时，请重试"
+        clearStatusObservation()
+        isLoading = true
+        item.preferredForwardBufferDuration = 1.0
+
+        let token = ObjectIdentifier(item)
+        statusObservation = item.observe(\.status, options: [.initial, .new]) { observed, _ in
+            let status = observed.status
+            Task { @MainActor in
+                handleItemStatus(status, token: token, seekTo: seekTo, autoplay: autoplay)
             }
         }
+
+        readyWatchdog = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 25_000_000_000)
+            guard !Task.isCancelled, !isReady, errorMessage == nil else { return }
+            player?.pause()
+            isLoading = false
+            isSwitchingQuality = false
+            errorMessage = "视频加载超时，请重试"
+        }
+    }
+
+    private func handleItemStatus(
+        _ status: AVPlayerItem.Status,
+        token: ObjectIdentifier,
+        seekTo: Double,
+        autoplay: Bool
+    ) {
+        guard let player, let item = player.currentItem, ObjectIdentifier(item) == token else { return }
+        switch status {
+        case .readyToPlay:
+            clearStatusObservation()
+            isLoading = false
+            isReady = true
+            isSwitchingQuality = false
+            Perf.end("video.firstFrame", "platform=mac")
+            if seekTo > 1 {
+                player.seek(to: CMTime(seconds: seekTo, preferredTimescale: 600))
+                currentTime = seekTo
+            }
+            if autoplay {
+                player.playImmediately(atRate: Float(playbackRate))
+                isPlaying = true
+            }
+            reportProgress(event: seekTo > 1 ? "seek" : "start", seconds: seekTo)
+        case .failed:
+            clearStatusObservation()
+            player.pause()
+            isLoading = false
+            isSwitchingQuality = false
+            errorMessage = "视频加载失败，请稍后重试"
+            #if DEBUG
+            btbDebugLog("play: mac item failed \(String(describing: item.error))")
+            #endif
+        default:
+            break
+        }
+    }
+
+    private func clearStatusObservation() {
+        readyWatchdog?.cancel()
+        readyWatchdog = nil
+        statusObservation?.invalidate()
+        statusObservation = nil
     }
 
     private func seek(player: AVPlayer?, to seconds: Double) async {
@@ -1261,7 +1291,16 @@ struct InlinePlayerView: View {
     }
 
     private func reportProgress(event: String, seconds: Double) {
-        guard !debugNoProgress, let resolved, isReady || event == "end" else { return }
+        guard let resolved else { return }
+        if !debugNoProgress {
+            model.playbackProgress.record(
+                bvid: video.bvid,
+                cid: resolved.cid,
+                seconds: event == "end" ? max(duration, 0) : seconds,
+                duration: duration
+            )
+        }
+        guard !debugNoProgress, isReady || event == "end" else { return }
         let milliseconds = Int64(max(seconds, 0) * 1000)
         Task {
             await model.reportPlaybackProgress(
@@ -1283,8 +1322,7 @@ struct InlinePlayerView: View {
     private func teardown() {
         hideControlsTask?.cancel()
         hideControlsTask = nil
-        statusTask?.cancel()
-        statusTask = nil
+        clearStatusObservation()
         progressTask?.cancel()
         progressTask = nil
         if isReady, !didReachEnd {

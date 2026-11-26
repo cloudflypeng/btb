@@ -160,3 +160,28 @@ BTB 的三条原则：
 iOS 模拟器：缓存命中后 `launch.firstFeed` 与 `launch.startCalled` 只差 2ms，说明 App 内部已无阻塞；剩余约 1.7s 是模拟器的进程拉起和场景创建（日志中可见约 1s 空白发生在系统场景握手阶段），需要真机测量。
 
 新发现（归入 B 阶段）：播放器通过每 200ms 轮询 `AVPlayerItem.status` 判断就绪，首帧平均多等约 100ms，B2 改为 KVO。
+
+### 第 2 阶段 秒开播放（2026-11-26）
+
+| 项 | 状态 | 结果 |
+|---|---|---|
+| B1 | ✅ | 卡片按下即 `player.resolve` + `stream.start`（`Shared/AppModel/AppModel+Prewarm.swift`、`Shared/Core/PlaybackPrewarmCache.swift`）。点击时若预解析仍在飞行中则**并入**（按已耗时预算决定是否等待），不再重复请求；缓存 60s，最多 3 个流会话，过期/被淘汰时 `stream.stop` 回收 |
+| B2 | ✅ | `AVPlayerItem.status` 改为 KVO；首帧改由 `AVPlayerLayer.isReadyForDisplay` 判定，封面常驻并交叉淡出（0.22s 缓动），全程无黑屏。轮询版平均多等的约 100ms 已去除 |
+| B3 | ✅（简化版） | bbcore `stream.start` 的 4 个 init/index 区间与 2 个首段校验改为并发（`internal/service/stream_gateway.go`），首播等待从 ~600ms 降到 ~250ms；AVPlayer 起播缓冲 1s，首帧后再放宽到 6s。低码率多档切换未做：当前单档起播已达标，等弱网数据再决定是否引入多 variant |
+| B4 | ✅ | `Shared/Core/PlaybackProgressStore.swift` 本地记录每个视频位置（4s 防抖落盘，600 条上限），与云端历史取较远者续播；首页卡片、相关视频行、宫格卡片封面底部显示进度条 |
+
+实测（**iPhone Air 真机**，Debug，`devicectl ... --console` 读取 `perf:` 行）：
+
+| 指标 | 数值 |
+|---|---|
+| 点击 → 首帧（按住 500ms，流已预热并并入） | **300 ms** |
+| 预解析（含 playurl） | 350 ms |
+| 预解析 + 建流 | 633 ms |
+| 播放器自建流（未命中预热） | 641 → 92 ms（并入后） |
+
+iOS 模拟器同路径：tap → 首帧 621ms（流走网络）/ 426ms 级（解析并入）。
+
+调试中发现并修复的三个坑（已写进代码注释）：
+1. `NSKeyValueObservedChange.newValue` 在 `.initial` 回调里是 `nil`，必须读 `observed.status`；
+2. 给视频层加 `opacity(0)` 会阻止 `AVPlayerLayer.isReadyForDisplay` 变真，首帧永远等超时——封面必须是叠在**可见**视频层之上的遮罩；
+3. 重定向到 pipe 时 stdout 是全缓冲，`devicectl --console` 会吞掉尾部日志，调试打印需 `fflush`。

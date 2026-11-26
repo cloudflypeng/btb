@@ -137,6 +137,7 @@ struct MobileFeedCard: View {
     let video: VideoItem
 
     @Environment(\.colorScheme) private var scheme
+    @Environment(AppModel.self) private var model
 
     var body: some View {
         MobileVideoLink(video: video) {
@@ -160,6 +161,7 @@ struct MobileFeedCard: View {
     private var cover: some View {
         RemoteImage(url: video.coverURL)
             .aspectRatio(16.0 / 9.0, contentMode: .fit)
+            .resumeProgress(for: video.bvid)
             .overlay(alignment: .bottomTrailing) {
                 if !video.durationText.isEmpty {
                     Text(video.durationText)

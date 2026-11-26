@@ -37,6 +37,7 @@ struct MobileVideoLink<Label: View>: View {
     @ViewBuilder let label: () -> Label
 
     @Environment(MobileRouter.self) private var router
+    @Environment(AppModel.self) private var model
 
     var body: some View {
         Button {
@@ -48,6 +49,7 @@ struct MobileVideoLink<Label: View>: View {
         } label: {
             label()
         }
-        .buttonStyle(BtbPressableStyle())
+        // B1: start resolve + stream on touch-down, so the player opens warm.
+        .buttonStyle(BtbPressableStyle(onPressDown: { model.prefetchPlayback(video) }))
     }
 }

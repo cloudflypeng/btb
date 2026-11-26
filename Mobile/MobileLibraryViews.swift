@@ -1272,6 +1272,7 @@ struct MobileGridCard: View {
             RemoteImage(url: video.coverURL)
                 .aspectRatio(16.0 / 9.0, contentMode: .fit)
                 .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+                .resumeProgress(for: video.bvid, cornerRadius: 9)
                 .overlay(alignment: .bottomTrailing) {
                     if !video.durationText.isEmpty {
                         Text(video.durationText)

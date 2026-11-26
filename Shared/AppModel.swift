@@ -497,6 +497,11 @@ final class AppModel {
 
     let core: any CoreTransport
     @ObservationIgnored let eventHub: EventHub
+    /// Resolve/stream results prepared while a video card is pressed (B1).
+    @ObservationIgnored let playbackPrewarm = PlaybackPrewarmCache()
+    /// Local per-video playback positions (B4).
+    @ObservationIgnored let playbackProgress = PlaybackProgressStore.shared
+    @ObservationIgnored var playbackPrewarmTask: Task<Void, Never>?
     var started = false
     var homeRequest = UUID()
     var followingRequest = UUID()
@@ -559,6 +564,8 @@ final class AppModel {
                let section = SidebarSection(rawValue: raw) {
                 selectSection(section)
             }
+            // Replays the press → open path so tap-to-first-frame can be
+            // measured on a device with `devicectl ... --console`.
             if let bvid = ProcessInfo.processInfo.environment["BTB_OPEN_BVID"], !bvid.isEmpty {
                 openVideo(VideoItem(bvid: bvid))
             }

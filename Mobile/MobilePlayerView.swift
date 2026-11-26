@@ -56,12 +56,18 @@ struct MobilePlayerView: View {
             .padding(.top, 8)
         }
         .task(id: video.bvid) {
+            #if DEBUG
+            btbDebugLog("detail: task bvid=\(video.bvid)")
+            #endif
             isCommentsExpanded = false
             model.openVideo(video)
             await model.loadDownloads()
             await model.loadWatchPage(for: video)
         }
         .onDisappear {
+            #if DEBUG
+            btbDebugLog("detail: disappear bvid=\(video.bvid)")
+            #endif
             model.closeVideo()
         }
     }
@@ -352,6 +358,7 @@ struct MobileVideoRow: View {
             RemoteImage(url: video.coverURL)
                 .frame(width: 150, height: 84)
                 .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+                .resumeProgress(for: video.bvid, cornerRadius: 9)
                 .overlay(alignment: .bottomTrailing) {
                     if !video.durationText.isEmpty {
                         Text(video.durationText)
@@ -469,13 +476,20 @@ struct MobilePlayerCanvas: View {
         ZStack {
             Color.black
 
+            // The surface stays visible (not opacity 0): AVPlayerLayer only
+            // reports `isReadyForDisplay` while it is actually rendering, and
+            // the cover on top already hides the black frame.
             if let player = playback.player {
                 VideoSurface(player: player, playback: playback)
-                    .opacity(playback.isReady ? 1 : 0)
             }
 
-            if !playback.isReady {
-                RemoteImage(url: playback.video?.coverURL)
+            // B2: the cached cover stands in for the first frame, then fades
+            // into the video — no black flash while the stream spins up.
+            if let cover = playback.video?.coverURL {
+                RemoteImage(url: cover)
+                    .opacity(playback.isReady ? 0 : 1)
+                    .animation(BtbMotion.curve(BtbMotion.base), value: playback.isReady)
+                    .allowsHitTesting(false)
             }
 
             Color.clear
@@ -1070,6 +1084,9 @@ struct VideoSurface: UIViewRepresentable {
         view.onLayerReady = { layer in
             playback?.attach(playerLayer: layer)
         }
+        view.onLayerReadyForDisplay = {
+            playback?.markSurfaceReady()
+        }
         view.player = player
         return view
     }
@@ -1077,6 +1094,9 @@ struct VideoSurface: UIViewRepresentable {
     func updateUIView(_ view: VideoSurfaceView, context: Context) {
         view.onLayerReady = { layer in
             playback?.attach(playerLayer: layer)
+        }
+        view.onLayerReadyForDisplay = {
+            playback?.markSurfaceReady()
         }
         if view.player !== player {
             view.player = player
@@ -1089,6 +1109,11 @@ final class VideoSurfaceView: UIView {
     override class var layerClass: AnyClass { AVPlayerLayer.self }
 
     var onLayerReady: ((AVPlayerLayer) -> Void)?
+    /// Fires once the layer has a decoded frame to present (B2 first frame).
+    var onLayerReadyForDisplay: (() -> Void)?
+
+    private var readyObservation: NSKeyValueObservation?
+    private var reportedReadyForDisplay = false
 
     private var playerLayer: AVPlayerLayer {
         layer as! AVPlayerLayer
@@ -1098,6 +1123,7 @@ final class VideoSurfaceView: UIView {
         get { playerLayer.player }
         set {
             playerLayer.player = newValue
+            observeDisplayReadiness()
             notifyLayerReady()
         }
     }
@@ -1117,6 +1143,26 @@ final class VideoSurfaceView: UIView {
     override func didMoveToWindow() {
         super.didMoveToWindow()
         notifyLayerReady()
+    }
+
+    private func observeDisplayReadiness() {
+        readyObservation?.invalidate()
+        readyObservation = nil
+        reportedReadyForDisplay = false
+        #if DEBUG
+        btbDebugLog("surface: observe player=\(playerLayer.player != nil) window=\(window != nil) ready=\(playerLayer.isReadyForDisplay)")
+        #endif
+        readyObservation = playerLayer.observe(\.isReadyForDisplay, options: [.initial, .new]) { [weak self] layer, _ in
+            #if DEBUG
+            btbDebugLog("surface: kvo ready=\(layer.isReadyForDisplay) window=\(layer.superlayer != nil)")
+            #endif
+            guard layer.isReadyForDisplay else { return }
+            Task { @MainActor [weak self] in
+                guard let self, !self.reportedReadyForDisplay else { return }
+                self.reportedReadyForDisplay = true
+                self.onLayerReadyForDisplay?()
+            }
+        }
     }
 
     func notifyLayerReady() {
