@@ -1,16 +1,40 @@
 import SwiftUI
 #if os(iOS)
 import UIKit
+#else
+import AppKit
 #endif
 
+/// Three springs, and nothing else (C2).
+///
+/// - `snappy` — feedback that follows the finger: presses, toggles, control bars.
+/// - `smooth` — content arriving or layout shifting: fades, expansions, page changes.
+/// - `bouncy` — an occasional deliberate overshoot, for a moment worth noticing.
 enum BtbMotion {
+    static var snappy: Animation { resolve(.spring(response: 0.3, dampingFraction: 0.85)) }
+    static var smooth: Animation { resolve(.spring(response: 0.45, dampingFraction: 1.0)) }
+    static var bouncy: Animation { resolve(.spring(response: 0.5, dampingFraction: 0.7)) }
+
     static let fast: Double = 0.16
     static let base: Double = 0.22
     static let slow: Double = 0.34
 
-    // Strong ease-out; built-in .easeOut is too weak for UI feedback.
+    /// Honours the system "reduce motion" setting: movement becomes a plain fade.
+    static var reduceMotion: Bool {
+        #if os(iOS)
+        UIAccessibility.isReduceMotionEnabled
+        #else
+        NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        #endif
+    }
+
+    static func resolve(_ animation: Animation) -> Animation {
+        reduceMotion ? .linear(duration: 0.14) : animation
+    }
+
+    // Kept for cross-fades where a spring reads as wobble rather than weight.
     static func curve(_ duration: Double = base) -> Animation {
-        .timingCurve(0.23, 1, 0.32, 1, duration: duration)
+        resolve(.timingCurve(0.23, 1, 0.32, 1, duration: duration))
     }
 
     static func animation(_ duration: Double = base, reduceMotion: Bool) -> Animation? {
@@ -31,7 +55,7 @@ enum BtbHaptics {
 }
 
 struct BtbPressableStyle: ButtonStyle {
-    var scale: CGFloat = 0.98
+    var scale: CGFloat = 0.97
     var haptic: Bool = true
     /// Runs once when the finger lands, before the tap resolves. Used to start
     /// network work a tap will need (playback prewarm).
@@ -59,8 +83,9 @@ private struct BtbPressableBody: View {
     var body: some View {
         configuration.label
             .scaleEffect(configuration.isPressed && !reduceMotion ? scale : 1)
-            .opacity(configuration.isPressed ? 0.92 : 1)
-            .animation(BtbMotion.curve(BtbMotion.fast), value: configuration.isPressed)
+            .brightness(configuration.isPressed ? 0.07 : 0)
+            .opacity(configuration.isPressed ? 0.94 : 1)
+            .animation(BtbMotion.snappy, value: configuration.isPressed)
             .sensoryFeedback(.impact(weight: .light), trigger: configuration.isPressed) { _, pressed in
                 pressed && haptic
             }

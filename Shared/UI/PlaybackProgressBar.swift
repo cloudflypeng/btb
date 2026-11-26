@@ -17,7 +17,7 @@ struct PlaybackProgressBar: View {
                 Rectangle()
                     .fill(AppTheme.brand)
                     .frame(width: proxy.size.width * min(max(fraction, 0), 1))
-                    .animation(reduceMotion ? nil : BtbMotion.curve(BtbMotion.base), value: fraction)
+                    .animation(reduceMotion ? nil : BtbMotion.smooth, value: fraction)
             }
         }
         .frame(height: height)

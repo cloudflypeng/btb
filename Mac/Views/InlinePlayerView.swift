@@ -183,7 +183,7 @@ struct InlinePlayerView: View {
                 controls(for: player)
                     .opacity(showControls ? 1 : 0)
                     .allowsHitTesting(showControls)
-                    .animation(.easeOut(duration: 0.18), value: showControls)
+                    .animation(BtbMotion.snappy, value: showControls)
                     .padding(.horizontal, 10)
                     .padding(.bottom, 10)
                     .frame(maxWidth: 880)
@@ -227,7 +227,7 @@ struct InlinePlayerView: View {
                 .padding(10)
             }
         }
-        .animation(.easeOut(duration: 0.2), value: isReady)
+        .animation(BtbMotion.snappy, value: isReady)
         .onContinuousHover { phase in
             switch phase {
             case .active:
@@ -306,7 +306,7 @@ struct InlinePlayerView: View {
                     .transition(.opacity)
             }
         }
-        .animation(.easeOut(duration: 0.12), value: activeCue)
+        .animation(BtbMotion.snappy, value: activeCue)
     }
 
     private var activeCue: SubtitleCue? {
@@ -507,7 +507,7 @@ struct InlinePlayerView: View {
             }
             Divider()
             Button("弹幕设置…") {
-                withAnimation(.easeOut(duration: 0.16)) {
+                withAnimation(BtbMotion.snappy) {
                     showDanmakuSettings.toggle()
                 }
             }
@@ -532,7 +532,7 @@ struct InlinePlayerView: View {
                     .foregroundStyle(.white)
                 Spacer()
                 Button {
-                    withAnimation(.easeOut(duration: 0.16)) {
+                    withAnimation(BtbMotion.snappy) {
                         showDanmakuSettings = false
                     }
                 } label: {
@@ -804,7 +804,7 @@ struct InlinePlayerView: View {
     }
 
     private func toggleTheater() {
-        withAnimation(.easeInOut(duration: 0.24)) {
+        withAnimation(BtbMotion.snappy) {
             isTheater.toggle()
         }
         showControls = true
@@ -820,7 +820,7 @@ struct InlinePlayerView: View {
         hideControlsTask = Task {
             try? await Task.sleep(nanoseconds: 2_400_000_000)
             guard !Task.isCancelled, isPlaying, !isScrubbing else { return }
-            withAnimation(.easeOut(duration: 0.2)) {
+            withAnimation(BtbMotion.snappy) {
                 showControls = false
             }
         }

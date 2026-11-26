@@ -63,6 +63,8 @@ struct MobileVideoLink<Label: View>: View {
         }
         // B1: start resolve + stream on touch-down, so the player opens warm.
         .buttonStyle(BtbPressableStyle(onPressDown: { model.prefetchPlayback(video) }))
+        // C3: long press shows a muted clip plus the quick actions.
+        .videoContextMenu(video, model: model)
     }
 }
 

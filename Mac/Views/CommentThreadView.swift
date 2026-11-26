@@ -101,7 +101,7 @@ struct CommentThreadView: View {
     }
 
     private func toggle() {
-        withAnimation(.easeOut(duration: 0.16)) {
+        withAnimation(BtbMotion.snappy) {
             isExpanded.toggle()
         }
         guard isExpanded, replies.isEmpty, !isLoading else { return }

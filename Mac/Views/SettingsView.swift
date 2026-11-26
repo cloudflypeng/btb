@@ -48,7 +48,7 @@ struct SettingsView: View {
             .overlay(alignment: .bottom) {
                 toast
             }
-            .animation(.easeOut(duration: 0.2), value: model.toastMessage)
+            .animation(BtbMotion.snappy, value: model.toastMessage)
             .task {
                 await model.applyDownloadConfig()
 #if DEBUG

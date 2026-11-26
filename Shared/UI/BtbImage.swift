@@ -271,7 +271,7 @@ struct BtbRemoteImage: View {
             }
         }
         .clipped()
-        .animation(BtbMotion.curve(BtbMotion.fast), value: image != nil)
+        .animation(BtbMotion.snappy, value: image != nil)
         .onGeometryChange(for: Int.self) { proxy in
             Int((max(proxy.size.width, proxy.size.height) * displayScale).rounded(.up))
         } action: { value in

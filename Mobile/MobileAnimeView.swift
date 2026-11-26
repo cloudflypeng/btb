@@ -600,7 +600,7 @@ struct MobileAnimeSeasonView: View {
                 Spacer()
                 if let evaluate = season.evaluate, evaluate.count > 120 {
                     Button(showsFullDescription ? "收起" : "展开") {
-                        withAnimation(.easeOut(duration: 0.18)) {
+                        withAnimation(BtbMotion.snappy) {
                             showsFullDescription.toggle()
                         }
                     }

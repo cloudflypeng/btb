@@ -61,7 +61,7 @@ struct VideoDetailView: View {
                     let anchor = environment["BTB_THREAD_ROOT"]
                         .flatMap(Int64.init)
                         .map { "thread-\($0)" } ?? "comments"
-                    withAnimation(.easeInOut(duration: 0.3)) {
+                    withAnimation(BtbMotion.smooth) {
                         reader.scrollTo(anchor, anchor: .top)
                     }
                 }
@@ -74,7 +74,7 @@ struct VideoDetailView: View {
         .overlay(alignment: .bottom) {
             toast
         }
-        .animation(.easeOut(duration: 0.2), value: model.toastMessage)
+        .animation(BtbMotion.snappy, value: model.toastMessage)
     }
 
     private func mainColumn(theaterSize: CGSize?) -> some View {
@@ -298,7 +298,7 @@ struct VideoDetailView: View {
 
     private var descriptionCard: some View {
         Button {
-            withAnimation(.easeOut(duration: 0.16)) {
+            withAnimation(BtbMotion.snappy) {
                 isDescriptionExpanded.toggle()
             }
         } label: {
@@ -697,7 +697,7 @@ private struct CommentsSectionView: View {
 
                     if isExpanded, model.comments.count > 3 {
                         Button {
-                            withAnimation(.easeOut(duration: 0.18)) {
+                            withAnimation(BtbMotion.snappy) {
                                 isExpanded = false
                             }
                         } label: {
@@ -726,7 +726,7 @@ private struct CommentsSectionView: View {
 
     private var expandCommentsButton: some View {
         Button {
-            withAnimation(.easeOut(duration: 0.18)) {
+            withAnimation(BtbMotion.snappy) {
                 isExpanded = true
             }
         } label: {
@@ -945,7 +945,7 @@ private struct CommentRowView: View {
 
                 if comment.message.count > 170 {
                     Button(isExpanded ? "收起" : "展开") {
-                        withAnimation(.easeOut(duration: 0.14)) {
+                        withAnimation(BtbMotion.snappy) {
                             isExpanded.toggle()
                         }
                     }

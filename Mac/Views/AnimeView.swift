@@ -235,7 +235,7 @@ private struct AnimeTimelineCard: View {
         }
         .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .onHover { hovering in
-            withAnimation(.easeOut(duration: 0.12)) {
+            withAnimation(BtbMotion.snappy) {
                 isHovering = hovering
             }
         }
@@ -308,7 +308,7 @@ private struct AnimeRankRow: View {
         )
         .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .onHover { hovering in
-            withAnimation(.easeOut(duration: 0.12)) {
+            withAnimation(BtbMotion.snappy) {
                 isHovering = hovering
             }
         }
@@ -882,7 +882,7 @@ struct AnimePlayerView: View {
                 controls(player)
                     .opacity(showControls ? 1 : 0)
                     .allowsHitTesting(showControls)
-                    .animation(.easeOut(duration: 0.18), value: showControls)
+                    .animation(BtbMotion.snappy, value: showControls)
                     .padding(.horizontal, 10)
                     .padding(.bottom, 10)
                     .frame(maxWidth: 880)
@@ -1169,7 +1169,7 @@ struct AnimePlayerView: View {
         hideControlsTask = Task { @MainActor in
             try? await Task.sleep(for: .seconds(2.6))
             guard !Task.isCancelled, isPlaying, !isScrubbing else { return }
-            withAnimation(.easeOut(duration: 0.2)) {
+            withAnimation(BtbMotion.snappy) {
                 showControls = false
             }
         }

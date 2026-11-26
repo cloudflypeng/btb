@@ -206,7 +206,7 @@ struct MobilePlayerView: View {
 
                     if !isCommentsExpanded, model.comments.count > 3 {
                         Button {
-                            withAnimation(.easeOut(duration: 0.18)) {
+                            withAnimation(BtbMotion.snappy) {
                                 isCommentsExpanded = true
                             }
                         } label: {
@@ -250,7 +250,7 @@ struct MobilePlayerView: View {
 
                         if isCommentsExpanded, model.comments.count > 3 {
                             Button {
-                                withAnimation(.easeOut(duration: 0.18)) {
+                                withAnimation(BtbMotion.snappy) {
                                     isCommentsExpanded = false
                                 }
                             } label: {
@@ -499,7 +499,7 @@ struct MobilePlayerCanvas: View {
             if let cover = playback.video?.coverURL {
                 RemoteImage(url: cover)
                     .opacity(playback.isReady ? 0 : 1)
-                    .animation(BtbMotion.curve(BtbMotion.base), value: playback.isReady)
+                    .animation(BtbMotion.smooth, value: playback.isReady)
                     .allowsHitTesting(false)
             }
 
@@ -516,7 +516,7 @@ struct MobilePlayerCanvas: View {
                         .exclusively(
                             before: TapGesture().onEnded {
                                 guard playback.isReady else { return }
-                                withAnimation(.easeOut(duration: 0.18)) {
+                                withAnimation(BtbMotion.snappy) {
                                     showControls.toggle()
                                 }
                                 if showControls { scheduleControlsHide() }
@@ -813,7 +813,7 @@ struct MobilePlayerCanvas: View {
         hideControlsTask = Task {
             try? await Task.sleep(nanoseconds: 2_600_000_000)
             guard !Task.isCancelled, playback.isPlaying, !playback.isScrubbing else { return }
-            withAnimation(.easeOut(duration: 0.2)) {
+            withAnimation(BtbMotion.snappy) {
                 showControls = false
             }
         }

@@ -85,7 +85,7 @@ struct VideoCard: View {
                         .transition(.opacity)
                     }
                 }
-                .animation(.easeOut(duration: 0.16), value: isHovering)
+                .animation(BtbMotion.snappy, value: isHovering)
 
             HStack(alignment: .top, spacing: 12) {
                 AvatarView(url: video.ownerFaceURL, size: 36)

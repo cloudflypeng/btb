@@ -108,7 +108,7 @@ struct ProfileView: View {
 
                     HStack(spacing: 20) {
                         Button {
-                            withAnimation(.easeOut(duration: 0.15)) {
+                            withAnimation(BtbMotion.snappy) {
                                 selectedTab = .following
                             }
                         } label: {
@@ -118,7 +118,7 @@ struct ProfileView: View {
                         .help("查看我的关注")
 
                         Button {
-                            withAnimation(.easeOut(duration: 0.15)) {
+                            withAnimation(BtbMotion.snappy) {
                                 selectedTab = .followers
                             }
                         } label: {
@@ -166,22 +166,22 @@ struct ProfileView: View {
     private var tabs: some View {
         HStack(spacing: 8) {
             TagChip(title: "最近投稿", isSelected: selectedTab == .uploads) {
-                withAnimation(.easeOut(duration: 0.15)) {
+                withAnimation(BtbMotion.snappy) {
                     selectedTab = .uploads
                 }
             }
             TagChip(title: "最近观看", isSelected: selectedTab == .history) {
-                withAnimation(.easeOut(duration: 0.15)) {
+                withAnimation(BtbMotion.snappy) {
                     selectedTab = .history
                 }
             }
             TagChip(title: "我的关注", isSelected: selectedTab == .following) {
-                withAnimation(.easeOut(duration: 0.15)) {
+                withAnimation(BtbMotion.snappy) {
                     selectedTab = .following
                 }
             }
             TagChip(title: "我的粉丝", isSelected: selectedTab == .followers) {
-                withAnimation(.easeOut(duration: 0.15)) {
+                withAnimation(BtbMotion.snappy) {
                     selectedTab = .followers
                 }
             }

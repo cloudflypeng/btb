@@ -304,7 +304,7 @@ struct RootView: View {
                 help: isSidebarVisible ? "收起导航" : "展开导航",
                 isDisabled: model.coreState != .ready
             ) {
-                withAnimation(.easeInOut(duration: 0.2)) {
+                withAnimation(BtbMotion.snappy) {
                     isSidebarVisible.toggle()
                 }
             }
@@ -373,7 +373,7 @@ private struct ToolbarGlyphButton: View {
         .buttonStyle(.plain)
         .disabled(isDisabled)
         .onHover { hovering in
-            withAnimation(.easeOut(duration: 0.12)) {
+            withAnimation(BtbMotion.snappy) {
                 isHovering = hovering
             }
         }

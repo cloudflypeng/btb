@@ -236,7 +236,7 @@ struct LiveRoomCard: View {
         )
         .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .onHover { hovering in
-            withAnimation(.easeOut(duration: 0.14)) {
+            withAnimation(BtbMotion.snappy) {
                 isHovering = hovering
             }
         }
@@ -356,7 +356,7 @@ struct LiveRoomView: View {
         .overlay(alignment: .bottom) {
             toast
         }
-        .animation(.easeOut(duration: 0.2), value: model.toastMessage)
+        .animation(BtbMotion.snappy, value: model.toastMessage)
     }
 
     private func playerColumn(width: CGFloat, height: CGFloat, theaterSize: CGSize?) -> some View {
@@ -639,7 +639,7 @@ private struct LivePlayerView: View {
         .focusable()
         .focusEffectDisabled()
         .onHover { hovering in
-            withAnimation(.easeOut(duration: 0.15)) {
+            withAnimation(BtbMotion.snappy) {
                 isHovering = hovering
             }
         }
@@ -648,14 +648,14 @@ private struct LivePlayerView: View {
             return .handled
         }
         .onKeyPress(KeyEquivalent("f")) {
-            withAnimation(.easeInOut(duration: 0.2)) {
+            withAnimation(BtbMotion.snappy) {
                 isTheater.toggle()
             }
             return .handled
         }
         .onExitCommand {
             guard isTheater else { return }
-            withAnimation(.easeInOut(duration: 0.2)) {
+            withAnimation(BtbMotion.snappy) {
                 isTheater = false
             }
         }
@@ -812,7 +812,7 @@ private struct LivePlayerView: View {
                     isTheater ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right",
                     help: isTheater ? "退出全屏" : "全屏"
                 ) {
-                    withAnimation(.easeInOut(duration: 0.2)) {
+                    withAnimation(BtbMotion.snappy) {
                         isTheater.toggle()
                     }
                 }
@@ -829,7 +829,7 @@ private struct LivePlayerView: View {
             )
             .opacity(showControls ? 1 : 0)
             .allowsHitTesting(showControls)
-            .animation(.easeOut(duration: 0.18), value: showControls)
+            .animation(BtbMotion.snappy, value: showControls)
         }
     }
 
@@ -1015,7 +1015,7 @@ private struct LiveChatPanel: View {
             .scrollIndicators(.hidden)
             .onChange(of: model.liveChatMessages.count) { _, _ in
                 guard let last = model.liveChatMessages.last else { return }
-                withAnimation(.easeOut(duration: 0.15)) {
+                withAnimation(BtbMotion.snappy) {
                     proxy.scrollTo(last.id, anchor: .bottom)
                 }
             }

@@ -172,6 +172,10 @@ extension AppModel {
 
     func addToWatchLater() async {
         guard let video = currentVideo else { return }
+        await addToWatchLater(video)
+    }
+
+    func addToWatchLater(_ video: VideoItem) async {
         guard hasAccount else {
             presentLogin()
             showToast("请先登录")

@@ -43,7 +43,7 @@ struct BtbCacheSettingsRow: View {
             BtbImagePipeline.trimDisk()
             return BtbImagePipeline.diskUsageBytes()
         }.value
-        withAnimation(BtbMotion.curve()) { bytes = value }
+        withAnimation(BtbMotion.smooth) { bytes = value }
     }
 
     private func clear() async {

@@ -75,7 +75,7 @@ struct MobileRootView: View {
                     .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
         }
-        .animation(.easeOut(duration: 0.2), value: model.toastMessage)
+        .animation(BtbMotion.snappy, value: model.toastMessage)
         .overlay {
             launchOverlay
         }

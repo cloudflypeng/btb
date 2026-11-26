@@ -378,7 +378,7 @@ private struct TopicSquareCard: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering in
-            withAnimation(.easeOut(duration: 0.14)) {
+            withAnimation(BtbMotion.snappy) {
                 isHovering = hovering
             }
         }

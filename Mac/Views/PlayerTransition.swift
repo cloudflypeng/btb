@@ -52,7 +52,7 @@ final class PlayerTransitionController {
 
             self.backdropOpacity = 1
             self.detailOpacity = 1
-            withAnimation(.easeOut(duration: 0.2)) {
+            withAnimation(BtbMotion.snappy) {
                 self.backdropOpacity = 0
                 self.heroOpacity = 0
             }

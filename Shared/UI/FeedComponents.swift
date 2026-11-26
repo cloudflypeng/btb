@@ -80,7 +80,7 @@ struct BtbPill: View {
             .contentShape(Capsule())
         }
         .buttonStyle(BtbPressableStyle(scale: 0.96, haptic: false))
-        .animation(BtbMotion.curve(BtbMotion.fast), value: isHovering)
+        .animation(BtbMotion.snappy, value: isHovering)
         .onHover { isHovering = $0 }
     }
 }

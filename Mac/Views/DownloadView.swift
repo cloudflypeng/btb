@@ -62,7 +62,7 @@ struct DownloadView: View {
         .overlay(alignment: .bottom) {
             toast
         }
-        .animation(.easeOut(duration: 0.2), value: model.toastMessage)
+        .animation(BtbMotion.snappy, value: model.toastMessage)
         .task {
             await model.loadDownloads()
         }
@@ -487,7 +487,7 @@ struct DownloadDetailView: View {
         .overlay(alignment: .bottom) {
             toast
         }
-        .animation(.easeOut(duration: 0.2), value: model.toastMessage)
+        .animation(BtbMotion.snappy, value: model.toastMessage)
         .confirmationDialog(
             "删除「\(job.title)」的下载？",
             isPresented: $isRemovePresented,
