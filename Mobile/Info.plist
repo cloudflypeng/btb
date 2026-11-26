@@ -46,6 +46,8 @@
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>BTB 需要访问本地网络，才能搜索到同一 WiFi 下的电视和投屏设备。</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>BTB 会把下载好的视频保存到你的相册，方便在「照片」里直接播放。</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>

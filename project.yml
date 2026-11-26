@@ -10,8 +10,8 @@ settings:
   base:
     SWIFT_VERSION: "5.0"
     MACOSX_DEPLOYMENT_TARGET: "14.0"
-    MARKETING_VERSION: "0.1.3"
-    CURRENT_PROJECT_VERSION: "4"
+    MARKETING_VERSION: "0.1.4"
+    CURRENT_PROJECT_VERSION: "5"
     CODE_SIGN_IDENTITY: "-"
     CODE_SIGN_STYLE: Manual
     ENABLE_APP_SANDBOX: NO
@@ -125,6 +125,8 @@ targets:
         NSBonjourServices:
           - _airplay._tcp
           - _raop._tcp
+        # Downloads are also saved to the user's photo library.
+        NSPhotoLibraryAddUsageDescription: BTB 会把下载好的视频保存到你的相册，方便在「照片」里直接播放。
     postBuildScripts:
       - name: Compile AppIcon
         basedOnDependencyAnalysis: false

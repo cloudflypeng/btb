@@ -224,6 +224,17 @@ struct MobileDownloadView: View {
         HStack(spacing: 8) {
             if job.isCompleted {
                 actionButton("播放", icon: "play.fill") { play(job) }
+                if model.photoSavingIDs.contains(job.id) {
+                    ProgressView().controlSize(.small)
+                } else if model.isSavedToPhotos(job) {
+                    actionButton("已在相册", icon: "checkmark") {
+                        Task { await model.saveDownloadToPhotos(job, manual: true) }
+                    }
+                } else {
+                    actionButton("存相册", icon: "photo.badge.arrow.down") {
+                        Task { await model.saveDownloadToPhotos(job, manual: true) }
+                    }
+                }
             } else if job.isPaused || job.isFailed {
                 actionButton("继续", icon: "play.fill") {
                     Task { await model.resumeDownload(job) }
@@ -265,6 +276,11 @@ struct MobileDownloadView: View {
     private func contextMenu(_ job: DownloadJob) -> some View {
         if job.isCompleted {
             Button("播放") { play(job) }
+            if !model.isSavedToPhotos(job) {
+                Button("保存到相册") {
+                    Task { await model.saveDownloadToPhotos(job, manual: true) }
+                }
+            }
         } else if job.isPaused || job.isFailed {
             Button("继续下载") { Task { await model.resumeDownload(job) } }
         } else if job.isDownloading {

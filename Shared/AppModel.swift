@@ -348,6 +348,8 @@ final class AppModel {
     var activeDownloadID: String?
     var downloadActionIDs: Set<String> = []
     var downloadEventsTask: Task<Void, Never>?
+    /// iOS only: downloads are copied into the photo library when they finish.
+    var photoSavingIDs: Set<String> = []
 
     var favoriteFolders: [FavFolder] = []
     var isLoadingPlaylists = false

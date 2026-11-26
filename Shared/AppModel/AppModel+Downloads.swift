@@ -176,6 +176,12 @@ extension AppModel {
         do {
             _ = try await core.call("download.remove", params: ["id": .string(job.id)])
             downloadJobs.removeAll { $0.id == job.id }
+            #if os(iOS)
+            // The photo already in the library belongs to the user; only the
+            // "this job was copied" note is cleared, so a fresh download
+            // copies itself again.
+            UserDefaults.standard.removeObject(forKey: Self.savedPhotoKey(jobID: job.id))
+            #endif
             if activeDownloadID == job.id {
                 activeDownloadID = nil
             }
@@ -245,6 +251,9 @@ extension AppModel {
         switch event.topic {
         case "download.completed":
             showToast("下载完成：\(job.title)")
+            #if os(iOS)
+            Task { await saveDownloadToPhotos(job) }
+            #endif
         case "download.failed":
             showToast("下载失败：\(job.title)")
         default:
@@ -261,4 +270,38 @@ extension AppModel {
         downloadJobs = sortedDownloads(downloadJobs)
         downloadUsedBytes = downloadJobs.reduce(0) { $0 + $1.downloadedBytes }
     }
+
+    #if os(iOS)
+    /// Copies a finished download into the photo library. The job itself
+    /// stays where it is: offline playback keeps working, and the photo is a
+    /// copy the system owns.
+    func saveDownloadToPhotos(_ job: DownloadJob, manual: Bool = false) async {
+        guard job.isCompleted else { return }
+        guard !photoSavingIDs.contains(job.id) else { return }
+        guard !isSavedToPhotos(job) else {
+            if manual { showToast("已经保存在相册里了") }
+            return
+        }
+        photoSavingIDs.insert(job.id)
+        defer { photoSavingIDs.remove(job.id) }
+        if downloadDirectory.isEmpty {
+            await applyDownloadConfig()
+        }
+        do {
+            try await MobilePhotoLibrary.save(job: job, downloadDirectory: downloadDirectory)
+            UserDefaults.standard.set(true, forKey: Self.savedPhotoKey(jobID: job.id))
+            showToast("已保存到相册：\(job.title)")
+        } catch {
+            showToast("保存到相册失败：\(describe(error))")
+        }
+    }
+
+    func isSavedToPhotos(_ job: DownloadJob) -> Bool {
+        UserDefaults.standard.bool(forKey: Self.savedPhotoKey(jobID: job.id))
+    }
+
+    private static func savedPhotoKey(jobID: String) -> String {
+        "download.savedToPhotos.\(jobID)"
+    }
+    #endif
 }
