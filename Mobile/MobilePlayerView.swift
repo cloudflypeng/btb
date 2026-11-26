@@ -10,34 +10,33 @@ struct MobilePlayerView: View {
     @Environment(\.colorScheme) private var scheme
     @State private var isCommentsExpanded = false
 
-    private let downloadQualities = [127, 126, 125, 120, 116, 112, 80, 74, 64, 32, 16]
-
     var body: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
-                Section {
-                    VStack(alignment: .leading, spacing: 16) {
+        VStack(spacing: 0) {
+            MobileVideoPlayer(video: video)
+                .aspectRatio(16.0 / 9.0, contentMode: .fit)
+                .background(.black)
+                .zIndex(1)
+
+            MobileVideoActionBar(video: video, detail: detail)
+
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 20) {
+                    VStack(alignment: .leading, spacing: 14) {
                         titleSection
-                        actionRow
-                        ownerRow
                         descriptionSection
-                        Divider()
-                        commentsSection
-                        Divider()
-                        relatedSection
+                        ownerRow
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.top, 14)
-                    .padding(.bottom, 30)
-                } header: {
-                    MobileVideoPlayer(video: video)
-                        .aspectRatio(16.0 / 9.0, contentMode: .fit)
-                        .background(.black)
-                        .zIndex(1)
+                    Divider()
+                    commentsSection
+                    Divider()
+                    relatedSection
                 }
+                .padding(.horizontal, 16)
+                .padding(.top, 16)
+                .padding(.bottom, 30)
             }
+            .scrollIndicators(.hidden)
         }
-        .scrollIndicators(.hidden)
         .background(AppTheme.background(scheme))
         .toolbar(.hidden, for: .navigationBar)
         .toolbar(.hidden, for: .tabBar)
@@ -96,117 +95,6 @@ struct MobilePlayerView: View {
             .font(.system(size: 12))
             .foregroundStyle(AppTheme.secondary(scheme))
         }
-    }
-
-    private var actionRow: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                Button {
-                    Task { await model.toggleLike() }
-                } label: {
-                    actionChip(
-                        icon: model.relation?.like == true ? "hand.thumbsup.fill" : "hand.thumbsup",
-                        title: likeTitle,
-                        active: model.relation?.like == true
-                    )
-                }
-                .buttonStyle(.plain)
-
-                Button {
-                    Task { await model.addToWatchLater() }
-                } label: {
-                    actionChip(icon: "bookmark", title: "稍后再看")
-                }
-                .buttonStyle(.plain)
-
-                downloadAction
-
-                ShareLink(item: video.pageURL) {
-                    actionChip(icon: "square.and.arrow.up", title: "分享")
-                }
-                .buttonStyle(.plain)
-
-                actionChip(
-                    icon: "text.bubble",
-                    title: model.commentTotal > 0 ? "\(MobileFormat.count(model.commentTotal))条评论" : "评论"
-                )
-            }
-        }
-    }
-
-    private var likeTitle: String {
-        let count = model.detail?.stat?.like ?? video.likeCount
-        if count > 0 { return MobileFormat.count(count) }
-        return "点赞"
-    }
-
-    private var currentDownload: DownloadJob? {
-        model.downloadJob(for: video)
-    }
-
-    @ViewBuilder
-    private var downloadAction: some View {
-        if let job = currentDownload {
-            Button {
-                Task { await handleDownloadTap(job) }
-            } label: {
-                actionChip(
-                    icon: downloadIcon(job),
-                    title: downloadTitle(job),
-                    active: job.isCompleted
-                )
-            }
-            .buttonStyle(.plain)
-        } else {
-            Menu {
-                ForEach(downloadQualities, id: \.self) { qn in
-                    Button(DownloadJob.qualityLabel(qn)) {
-                        Task {
-                            await model.startDownload(for: video, detail: detail, qn: Int64(qn))
-                        }
-                    }
-                }
-            } label: {
-                actionChip(icon: "arrow.down.circle", title: "下载")
-            }
-        }
-    }
-
-    private func downloadTitle(_ job: DownloadJob) -> String {
-        if job.isCompleted { return "已下载" }
-        if job.isPaused { return "继续下载" }
-        if job.isFailed { return "重试下载" }
-        return "下载中 \(Int(job.progress * 100))%"
-    }
-
-    private func downloadIcon(_ job: DownloadJob) -> String {
-        if job.isCompleted { return "arrow.down.circle.fill" }
-        if job.isPaused || job.isFailed { return "arrow.clockwise.circle" }
-        return "pause.circle"
-    }
-
-    private func handleDownloadTap(_ job: DownloadJob) async {
-        if job.isCompleted {
-            model.showToast("已下载，可在「我的 · 下载」离线观看")
-        } else if job.isDownloading {
-            await model.pauseDownload(job)
-        } else {
-            await model.resumeDownload(job)
-        }
-    }
-
-    private func actionChip(icon: String, title: String, active: Bool = false) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: icon)
-                .font(.system(size: 13, weight: .semibold))
-            Text(title)
-                .font(.system(size: 12.5, weight: .semibold))
-                .lineLimit(1)
-        }
-        .foregroundStyle(active ? AppTheme.selectedText(scheme) : AppTheme.text(scheme))
-        .padding(.horizontal, 14)
-        .frame(height: 34)
-        .background(active ? AppTheme.selected(scheme) : AppTheme.chip(scheme), in: Capsule())
     }
 
     private var ownerRow: some View {

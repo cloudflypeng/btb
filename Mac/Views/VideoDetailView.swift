@@ -89,14 +89,12 @@ struct VideoDetailView: View {
                             }
                         }
 
-                        Text(video.title)
+                        Text(displayTitle)
                             .font(.system(size: 22, weight: .bold))
                             .lineSpacing(3)
                             .foregroundStyle(AppTheme.text(scheme))
                             .textSelection(.enabled)
                             .fixedSize(horizontal: false, vertical: true)
-
-                        actionBar
 
                         descriptionCard
 
@@ -122,12 +120,23 @@ struct VideoDetailView: View {
                     }
                 }
             } header: {
-                InlinePlayerView(video: video, isTheater: $isTheater)
-                    .id(video.bvid)
-                    .frame(width: theaterSize?.width, height: theaterSize?.height)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .background(isTheater ? Color.clear : AppTheme.background(scheme))
-                    .zIndex(1)
+                VStack(spacing: 0) {
+                    InlinePlayerView(video: video, isTheater: $isTheater)
+                        .id(video.bvid)
+                        .frame(width: theaterSize?.width, height: theaterSize?.height)
+                        .frame(maxWidth: .infinity, alignment: .center)
+
+                    // Pinned with the player so actions never scroll away.
+                    if !isTheater, !isContentLoading {
+                        actionBar
+                            .padding(.vertical, 12)
+                            .overlay(alignment: .bottom) {
+                                Rectangle().fill(AppTheme.divider(scheme)).frame(height: 0.5)
+                            }
+                    }
+                }
+                .background(isTheater ? Color.clear : AppTheme.background(scheme))
+                .zIndex(1)
             }
         }
     }
@@ -140,6 +149,13 @@ struct VideoDetailView: View {
         }
         let height = max(1, size.height)
         return CGSize(width: height * 16 / 9, height: height)
+    }
+
+    private var displayTitle: String {
+        if model.detailBVID == video.bvid, let title = model.detail?.title, !title.isEmpty {
+            return title
+        }
+        return video.title
     }
 
     private var isContentLoading: Bool {
