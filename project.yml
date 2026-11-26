@@ -1,0 +1,155 @@
+name: BTB
+options:
+  bundleIdPrefix: com.cloudflypeng
+  createIntermediateGroups: true
+  deploymentTarget:
+    macOS: "14.0"
+    iOS: "17.0"
+
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+    MARKETING_VERSION: "0.1.3"
+    CURRENT_PROJECT_VERSION: "4"
+    CODE_SIGN_IDENTITY: "-"
+    CODE_SIGN_STYLE: Manual
+    ENABLE_APP_SANDBOX: NO
+    ENABLE_HARDENED_RUNTIME: NO
+
+targets:
+  BTB:
+    type: application
+    platform: macOS
+    sources:
+      - path: Shared
+      - path: Mac
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.cloudflypeng.btb
+        PRODUCT_NAME: BTB
+    info:
+      path: Mac/Info.plist
+      properties:
+        CFBundleDisplayName: BTB
+        CFBundleIconFile: AppIcon
+        CFBundleIconName: AppIcon
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        LSApplicationCategoryType: public.app-category.entertainment
+        NSHumanReadableCopyright: "Copyright © 2026 btb contributors"
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+    postBuildScripts:
+      - name: Compile AppIcon
+        basedOnDependencyAnalysis: false
+        script: |
+          set -euo pipefail
+          ICON="${SRCROOT}/AppIcon.icon"
+          DEST_DIR="${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}"
+          mkdir -p "${DEST_DIR}"
+          /usr/bin/actool "${ICON}" \
+            --compile "${DEST_DIR}" \
+            --notices --warnings --errors \
+            --output-partial-info-plist "${DERIVED_FILE_DIR}/AppIcon-partial.plist" \
+            --app-icon AppIcon \
+            --enable-on-demand-resources NO \
+            --development-region en \
+            --target-device mac \
+            --minimum-deployment-target 26.0 \
+            --platform macosx
+          echo "Compiled AppIcon: ${DEST_DIR}/AppIcon.icns"
+      - name: Bundle bbcore
+        basedOnDependencyAnalysis: false
+        script: |
+          set -euo pipefail
+          DEST_DIR="${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}"
+          mkdir -p "${DEST_DIR}"
+          DEST="${DEST_DIR}/bbcore"
+          if [ -n "${BBCORE_BIN:-}" ] && [ -x "${BBCORE_BIN}" ]; then
+            cp "${BBCORE_BIN}" "${DEST}"
+          else
+            CORE_DIR="${SRCROOT}/../bbcore"
+            if [ ! -f "${CORE_DIR}/go.mod" ]; then
+              echo "error: bbcore sibling project not found at ${CORE_DIR}" >&2
+              echo "set BBCORE_BIN to an existing bbcore binary, or clone bbcore next to btb" >&2
+              exit 1
+            fi
+            (cd "${CORE_DIR}" && CGO_ENABLED=0 go build -trimpath -o "${DERIVED_FILE_DIR}/bbcore" ./cmd/bbcore)
+            cp "${DERIVED_FILE_DIR}/bbcore" "${DEST}"
+          fi
+          chmod +x "${DEST}"
+          echo "Bundled Go core: ${DEST}"
+
+  BTBMobile:
+    type: application
+    platform: iOS
+    sources:
+      - path: Shared
+      - path: Mobile
+    dependencies:
+      - framework: Frameworks/BTBCore.xcframework
+        embed: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.cloudflypeng.btb.mobile
+        PRODUCT_NAME: BTB
+        TARGETED_DEVICE_FAMILY: "1"
+        IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+        CODE_SIGN_IDENTITY: "-"
+        CODE_SIGN_STYLE: Manual
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+    info:
+      path: Mobile/Info.plist
+      properties:
+        CFBundleDisplayName: BTB
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CFBundleIcons:
+          CFBundlePrimaryIcon:
+            CFBundleIconFiles:
+              - AppIcon60x60
+            CFBundleIconName: AppIcon
+        UILaunchScreen: {}
+        CADisableMinimumFrameDurationOnPhone: true
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UIBackgroundModes:
+          - audio
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+    postBuildScripts:
+      - name: Compile AppIcon
+        basedOnDependencyAnalysis: false
+        script: |
+          set -euo pipefail
+          ICON="${SRCROOT}/AppIcon.icon"
+          DEST_DIR="${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}"
+          mkdir -p "${DEST_DIR}"
+          /usr/bin/actool "${ICON}" \
+            --compile "${DEST_DIR}" \
+            --notices --warnings --errors \
+            --output-partial-info-plist "${DERIVED_FILE_DIR}/AppIcon-partial.plist" \
+            --app-icon AppIcon \
+            --enable-on-demand-resources NO \
+            --development-region en \
+            --target-device iphone \
+            --minimum-deployment-target 17.0 \
+            --platform iphoneos
+          echo "Compiled iOS AppIcon: ${DEST_DIR}/Assets.car"
+
+schemes:
+  BTB:
+    build:
+      targets:
+        BTB: all
+    run:
+      config: Debug
+  BTBMobile:
+    build:
+      targets:
+        BTBMobile: all
+    run:
+      config: Debug
