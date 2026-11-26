@@ -241,3 +241,11 @@ iOS 模拟器同路径：tap → 首帧 621ms（流走网络）/ 426ms 级（解
 | 3 | ✅ | 操作栏上移：视频下方进度条触摸条从 16pt 收到 10pt（可见 3pt 细线仍在视频下沿），整行图标与画面更近 |
 | 4 | ✅ | 全屏（横屏）不再下拉关闭：竖屏才跟手下拉关闭；横屏改成**左边缘横向右滑**（起点距左缘 ≤28pt、行程 >90pt 松手）退出播放页，拖动时中央 HUD 提示「继续右滑退出 / 松手退出」，不与横向拖进度冲突 |
 | 5 | ⏳ | 消息页一条「诡异竖线」：未登录状态下（本机模拟器）没有复现，需要一张消息页截图确认具体位置后再改 |
+
+### 第 4.7 阶段 单流播放与 bbcore 保活（2026-11-26 深夜）
+
+| # | 状态 | 结果 |
+|---|---|---|
+| 1 | ✅ | **任意情况只播一个视频流**：新增 `Mobile/MobilePlaybackFocus.swift`，全 App 只有一处「播放名额」。播放页（`MobilePlaybackController`）、长按预览（`PreviewPlayback`）、直播间、番剧页在真正 `play()` 之前先 claim；后来者会让前一个暂停（预览直接结束并释放 stream session），前一个离场时把名额交还并自动恢复播放。`MobileRouter.open/play` 现在会先关掉任何画中画悬浮窗（以前只关同一个 bvid 的），切换视频时旧播放器不再和新播放器短暂重叠出声。模拟器实测：长按 UP 主页卡片 → 日志 `focus: suspended MobilePlaybackController` → `focus: PreviewPlayback now playing`，松手后 `focus: release PreviewPlayback`，主视频继续 |
+| 2 | ✅ | **bbcore 常驻保活**：`Shared/AppModel/AppModel+CoreHealth.swift` 每 15 秒 `core.ping`（5s 超时，后台挂起时跳过），无响应就在原地 stop + start 重启核心，重启后重新 ping、刷新 capabilities、重下发 `download.config` 与下载列表，并弹「核心服务已重新连接」。并发调用共享同一次重启 |
+| 3 | ✅ | **播放失败 → 重启核心再试一次**：`player.resolve`/`stream.start` 报连接类错误、`AVPlayerItem` 直接 `.failed`、或 25 秒首帧超时，都会触发一次核心重启再 `prepare()`；每个视频只试一次，避免死链无限重启。直播/番剧同理（每个房间/剧集一次）。核心重启后广播 `.btbCoreRecovered`，播放中的页面据此重新解析流地址：播放页从当前秒数续播（保持暂停/播放状态），直播重新 `live.play`，番剧重新 `playAnime`。20 秒内刚重启过且 ping 正常时不再重复重启。模拟器实测：`BTB_CORE_DIE_AFTER=10` 杀掉核心 → `core: recovering (watchdog)` → `core: recovered` → 播放页自动换新网关 URL 并继续播放 |
