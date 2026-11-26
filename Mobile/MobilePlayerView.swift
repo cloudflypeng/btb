@@ -596,6 +596,7 @@ struct MobilePlayerCanvas: View {
                     scheduleControlsHide()
                 },
                 allowsDismissDrag: !isFullscreen,
+                allowsEdgeDismiss: isFullscreen,
                 dismissOffset: $dismissOffset,
                 onDismiss: onDismiss
             )

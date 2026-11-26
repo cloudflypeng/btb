@@ -19,8 +19,11 @@ struct PlayerGestureOverlay: View {
     var onDoubleTap: () -> Void
     /// Portrait: the picture itself is the way out — drag it down, the page
     /// follows the finger and closes past the threshold. Landscape keeps the
-    /// vertical drags for brightness and volume.
+    /// vertical drags for brightness and volume, so fullscreen leaves through
+    /// a horizontal swipe from the left edge instead.
     var allowsDismissDrag = false
+    /// Landscape only: a swipe starting at the left edge closes the player.
+    var allowsEdgeDismiss = false
     @Binding var dismissOffset: CGFloat
     var onDismiss: () -> Void
 
@@ -36,7 +39,7 @@ struct PlayerGestureOverlay: View {
     @State private var boostTask: Task<Void, Never>?
 
     private enum DragMode: Equatable {
-        case none, seek, brightness, volume, dismiss
+        case none, seek, brightness, volume, dismiss, edgeDismiss
     }
 
     private struct HUD: Equatable {
@@ -80,10 +83,21 @@ struct PlayerGestureOverlay: View {
                 if mode == .none {
                     let horizontal = abs(value.translation.width) > abs(value.translation.height)
                     if horizontal {
-                        mode = .seek
-                        startValue = playback.currentTime
-                        playback.isScrubbing = true
-                        showControls = true
+                        // Fullscreen has no pull-down to leave; the left edge
+                        // is the back gesture there, and it must win over the
+                        // seek drag it would otherwise start.
+                        if allowsEdgeDismiss,
+                           value.startLocation.x <= Self.edgeDismissZone,
+                           value.translation.width > 0 {
+                            mode = .edgeDismiss
+                            showControls = false
+                            hud = HUD(icon: "chevron.left", text: "松手退出")
+                        } else {
+                            mode = .seek
+                            startValue = playback.currentTime
+                            playback.isScrubbing = true
+                            showControls = true
+                        }
                     } else if allowsDismissDrag {
                         // Pull down on the picture to leave the page, as the
                         // player page has no chrome of its own any more.
@@ -115,6 +129,14 @@ struct PlayerGestureOverlay: View {
                     // Rubber-bands above the top, never drags up past it.
                     let pull = max(value.translation.height, 0)
                     dismissOffset = pull
+                case .edgeDismiss:
+                    // No page slide in landscape: the picture fills the
+                    // screen, so only the hint follows the finger.
+                    let progress = min(max(value.translation.width / Self.edgeDismissDistance, 0), 1)
+                    hud = HUD(
+                        icon: "chevron.left",
+                        text: progress >= 1 ? "松手退出" : "继续右滑退出"
+                    )
                 case .none:
                     break
                 }
@@ -135,12 +157,26 @@ struct PlayerGestureOverlay: View {
                     } else {
                         withAnimation(reduceMotion ? nil : BtbMotion.snappy) { dismissOffset = 0 }
                     }
+                case .edgeDismiss:
+                    let travelled = max(
+                        value.translation.width,
+                        value.predictedEndTranslation.width
+                    )
+                    hud = nil
+                    if travelled > Self.edgeDismissDistance {
+                        onDismiss()
+                    }
                 case .none:
                     break
                 }
                 mode = .none
             }
     }
+
+    /// How wide a strip along the left edge starts the back swipe, and how far
+    /// it has to travel before the release counts.
+    private static let edgeDismissZone: CGFloat = 28
+    private static let edgeDismissDistance: CGFloat = 90
 
     // MARK: - Long press (2× while held)
 

@@ -41,8 +41,9 @@ struct PlayerProgressLine: View {
                     }
                 }
             }
-            // Flush with the video above it: the whole 16pt strip is touch
-            // area, but the visible line sits on its top edge (no gap).
+            // Flush with the video above it: the whole strip is touch area,
+            // but the visible line sits on its top edge (no gap). The strip is
+            // kept slim so the action row below sits close to the picture.
             .frame(maxHeight: .infinity, alignment: .top)
             .contentShape(Rectangle())
             .gesture(
@@ -61,7 +62,7 @@ struct PlayerProgressLine: View {
                     }
             )
         }
-        .frame(height: 16)
+        .frame(height: 10)
         .background(AppTheme.background(scheme))
         // C4: the thumb lands where the picture does.
         .sensoryFeedback(.impact(weight: .light), trigger: playback.isScrubbing)
