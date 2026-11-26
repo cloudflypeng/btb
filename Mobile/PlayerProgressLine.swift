@@ -25,7 +25,9 @@ struct PlayerProgressLine: View {
                     .frame(width: geo.size.width * fraction)
             }
             .frame(height: 3)
-            .frame(maxHeight: .infinity, alignment: .center)
+            // Flush with the video above it: the whole 16pt strip is touch
+            // area, but the visible line sits on its top edge (no gap).
+            .frame(maxHeight: .infinity, alignment: .top)
             .contentShape(Rectangle())
             .gesture(
                 DragGesture(minimumDistance: 0)
@@ -35,7 +37,8 @@ struct PlayerProgressLine: View {
                             playback.isScrubbing = true
                         }
                         let x = min(max(value.location.x, 0), geo.size.width)
-                        playback.scrubTime = Double(x / max(geo.size.width, 1)) * playback.duration
+                        let ratio = Double(x / max(geo.size.width, 1))
+                        playback.scrubTime = ratio * playback.duration
                     }
                     .onEnded { _ in
                         playback.finishScrub()
@@ -47,5 +50,82 @@ struct PlayerProgressLine: View {
         // C4: the thumb lands where the picture does.
         .sensoryFeedback(.impact(weight: .light), trigger: playback.isScrubbing)
         .accessibilityLabel("播放进度")
+    }
+}
+
+/// D2: the frame under the finger while the scrub bar is being dragged.
+///
+/// It lives inside the player canvas rather than in the progress line: the
+/// video is a UIKit layer, and anything drawn over it from a sibling view can
+/// slip behind it as soon as the canvas redraws mid-scrub.
+struct ScrubPreview: View {
+    let playback: MobilePlaybackController
+    var thumbnails: VideoThumbnails?
+
+    private let cardWidth: CGFloat = 152
+    private let gap: CGFloat = 8
+
+    var body: some View {
+        GeometryReader { geo in
+            let image = thumbnails?.image(at: playback.scrubTime)
+            let height = cardHeight(image)
+            let fraction = playback.duration > 0
+                ? min(max(playback.scrubTime / playback.duration, 0), 1)
+                : 0
+            let center = min(
+                max(geo.size.width * CGFloat(fraction), cardWidth / 2),
+                max(geo.size.width - cardWidth / 2, cardWidth / 2)
+            )
+            card(image: image, height: height)
+                .frame(width: cardWidth, height: height)
+                .position(x: center, y: max(geo.size.height - height / 2 - gap, height / 2))
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
+    private func cardHeight(_ image: CGImage?) -> CGFloat {
+        let aspect = image.map { CGFloat($0.height) / CGFloat(max($0.width, 1)) } ?? (9.0 / 16.0)
+        return cardWidth * aspect + 18
+    }
+
+    private func card(image: CGImage?, height: CGFloat) -> some View {
+        VStack(spacing: 0) {
+            ZStack {
+                Color(white: 0.18)
+                if let image {
+                    Image(decorative: image, scale: 1)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                }
+            }
+            .frame(width: cardWidth, height: height - 18)
+            .clipped()
+            Text(timeLabel(playback.scrubTime))
+                .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+                .frame(height: 18)
+                .background(.black.opacity(0.72))
+        }
+        .frame(width: cardWidth)
+        .background(Color.black)
+        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .strokeBorder(.white.opacity(0.16), lineWidth: 0.5)
+        )
+        .shadow(color: .black.opacity(0.4), radius: 12, y: 5)
+    }
+
+    private func timeLabel(_ seconds: Double) -> String {
+        let total = Int(max(seconds, 0))
+        let h = total / 3600
+        let m = (total % 3600) / 60
+        let s = total % 60
+        if h > 0 {
+            return String(format: "%d:%02d:%02d", h, m, s)
+        }
+        return String(format: "%d:%02d", m, s)
     }
 }

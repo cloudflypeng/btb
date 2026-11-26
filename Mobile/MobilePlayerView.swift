@@ -11,18 +11,60 @@ struct MobilePlayerView: View {
     @State private var isCommentsExpanded = false
     /// Owned here so the progress line under the video can read it.
     @State private var playback = MobilePlaybackController()
+    /// D2: scrub-bar frames for this video.
+    @State private var thumbnails = VideoThumbnails()
 
     var body: some View {
+        ZStack(alignment: .top) {
+            // The strip above the video (status bar / Dynamic Island area) is
+            // black, not page background.
+            Color.black
+                .ignoresSafeArea(edges: .top)
+            page
+        }
+        .toolbar(.hidden, for: .navigationBar)
+        .toolbar(.hidden, for: .tabBar)
+        .navigationBarBackButtonHidden(true)
+        .task(id: video.bvid) {
+            #if DEBUG
+            btbDebugLog("detail: task bvid=\(video.bvid)")
+            #endif
+            isCommentsExpanded = false
+            model.openVideo(video)
+            await playback.load(video: video, model: model)
+            await model.loadDownloads()
+            await model.loadWatchPage(for: video, force: true)
+        }
+        .onChange(of: playback.duration, initial: true) { _, seconds in
+            guard seconds > 0 else { return }
+            let cid = playback.resolved?.cid ?? video.cid.map(Int64.init)
+            Task {
+                await thumbnails.prepare(
+                    core: model.core,
+                    bvid: video.bvid,
+                    cid: cid,
+                    duration: seconds
+                )
+            }
+        }
+        .onDisappear {
+            #if DEBUG
+            btbDebugLog("detail: disappear bvid=\(video.bvid)")
+            #endif
+            model.closeVideo(bvid: video.bvid)
+        }
+    }
+
+    private var page: some View {
         VStack(spacing: 0) {
-            // Pinned under the Dynamic Island; the black above it is the
-            // status-bar area, not a gap.
-            MobileVideoPlayer(video: video, playback: playback)
+            // Pinned straight under the Dynamic Island: the black above it is
+            // the status-bar strip, and the progress line hugs its bottom edge.
+            MobileVideoPlayer(video: video, playback: playback, thumbnails: thumbnails)
                 .aspectRatio(16.0 / 9.0, contentMode: .fit)
                 .background(Color.black)
-                .background(Color.black.ignoresSafeArea(edges: .top))
-                .zIndex(1)
 
             PlayerProgressLine(playback: playback)
+                .zIndex(2)
 
             MobileVideoActionBar(video: video, detail: detail)
 
@@ -45,25 +87,6 @@ struct MobilePlayerView: View {
             .scrollIndicators(.hidden)
         }
         .background(AppTheme.background(scheme))
-        .toolbar(.hidden, for: .navigationBar)
-        .toolbar(.hidden, for: .tabBar)
-        .navigationBarBackButtonHidden(true)
-        .task(id: video.bvid) {
-            #if DEBUG
-            btbDebugLog("detail: task bvid=\(video.bvid)")
-            #endif
-            isCommentsExpanded = false
-            model.openVideo(video)
-            await playback.load(video: video, model: model)
-            await model.loadDownloads()
-            await model.loadWatchPage(for: video, force: true)
-        }
-        .onDisappear {
-            #if DEBUG
-            btbDebugLog("detail: disappear bvid=\(video.bvid)")
-            #endif
-            model.closeVideo(bvid: video.bvid)
-        }
     }
 
     private var detail: VideoInfoData? {
@@ -389,13 +412,15 @@ struct MobileVideoPlayer: View {
     let video: VideoItem
     /// Owned by `MobilePlayerView`, shared with the progress line below the video.
     let playback: MobilePlaybackController
+    /// D2: frames for the scrub preview.
+    var thumbnails: VideoThumbnails?
 
     @Environment(AppModel.self) private var model
     @Environment(MobileRouter.self) private var router
     @State private var fullscreenHost: LandscapePlayerHost?
 
     var body: some View {
-        MobilePlayerCanvas(playback: playback, isFullscreen: false) {
+        MobilePlayerCanvas(playback: playback, isFullscreen: false, thumbnails: thumbnails) {
             enterFullscreen()
         }
         .aspectRatio(16.0 / 9.0, contentMode: .fit)
@@ -454,7 +479,7 @@ struct MobileVideoPlayer: View {
         let top = UIApplication.shared.topViewController()
         guard let top else { return }
         MobileOrientation.shared.setAllowsLandscape(true)
-        let canvas = MobilePlayerCanvas(playback: playback, isFullscreen: true) {
+        let canvas = MobilePlayerCanvas(playback: playback, isFullscreen: true, thumbnails: thumbnails) {
             exitFullscreen()
         }
         .environment(model)
@@ -488,6 +513,9 @@ struct MobileVideoPlayer: View {
 struct MobilePlayerCanvas: View {
     let playback: MobilePlaybackController
     var isFullscreen: Bool
+    /// D2: scrub-bar frames; the preview draws inside the canvas so it stays
+    /// above the video's own layer.
+    var thumbnails: VideoThumbnails?
     var onToggleFullscreen: () -> Void
 
     @Environment(AppModel.self) private var model
@@ -627,6 +655,12 @@ struct MobilePlayerCanvas: View {
                     .padding(.top, 20)
                     Spacer()
                 }
+            }
+
+            // D2: the scrub preview sits on top of everything the canvas
+            // draws, danmaku included, but only while the bar is held.
+            if playback.isScrubbing, playback.duration > 0 {
+                ScrubPreview(playback: playback, thumbnails: thumbnails)
             }
         }
         .clipped()
