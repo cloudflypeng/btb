@@ -147,6 +147,7 @@ struct HomeView: View {
                     VideoCard(video: video)
                 }
                 .buttonStyle(.plain)
+                .prefetchCovers(model.videos, after: video, lookahead: 12)
             }
         }
     }

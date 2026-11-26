@@ -1103,6 +1103,7 @@ struct InlinePlayerView: View {
                     isLoading = false
                     isReady = true
                     isSwitchingQuality = false
+                    Perf.end("video.firstFrame", "platform=mac")
                     if autoplay {
                         player?.play()
                         player?.rate = Float(playbackRate)

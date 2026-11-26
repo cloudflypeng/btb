@@ -101,6 +101,7 @@ struct MobileHomeView: View {
                 } else {
                     ForEach(model.videos) { video in
                         MobileFeedCard(video: video)
+                            .prefetchCovers(model.videos, after: video, lookahead: 4)
                     }
 
                     InfiniteScrollFooter(

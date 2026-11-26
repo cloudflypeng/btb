@@ -11,7 +11,7 @@ ANDROID_HOME ?= $(HOME)/Library/Android/sdk
 ANDROID_NDK_HOME ?= $(ANDROID_HOME)/ndk/27.1.12297006
 ANDROID_AAR := $(ANDROID_DIR)/app/libs/bbcore.aar
 
-.PHONY: project build run clean core mobile core-http core-ios android android-core
+.PHONY: project build run clean core mobile core-http core-ios android android-core perf
 
 project: $(CORE_FRAMEWORK)
 	xcodegen generate
@@ -55,3 +55,6 @@ mobile: project
 
 clean:
 	rm -rf $(DERIVED) $(DERIVED)-ios $(PROJECT)
+
+perf: build
+	scripts/perf.sh mac $(or $(SECS),20)

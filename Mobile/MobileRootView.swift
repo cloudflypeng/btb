@@ -162,6 +162,9 @@ struct MobileRootView: View {
         switch model.coreState {
         case .ready:
             EmptyView()
+        case .starting where !model.videos.isEmpty:
+            // Cached feed is already on screen; don't hide it behind a splash.
+            EmptyView()
         case .starting:
             ZStack {
                 AppTheme.background(scheme).ignoresSafeArea()

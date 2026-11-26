@@ -4,6 +4,10 @@ import SwiftUI
 struct BTBApp: App {
     @State private var model = AppModel(transport: BBCoreClient())
 
+    init() {
+        _ = Perf.processStart
+    }
+
     var body: some Scene {
         WindowGroup {
             RootView()

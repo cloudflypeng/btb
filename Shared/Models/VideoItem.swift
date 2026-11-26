@@ -1,6 +1,6 @@
 import Foundation
 
-struct VideoItem: Identifiable, Hashable {
+struct VideoItem: Identifiable, Hashable, Codable {
     let bvid: String
     let aid: Int64?
     let cid: Int?

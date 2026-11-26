@@ -529,8 +529,18 @@ final class AppModel {
     func start() async {
         guard !started else { return }
         started = true
+        Perf.milestone("launch.startCalled")
         coreState = .starting
         errorMessage = nil
+        // A5: render the last feed immediately; the network refresh replaces it.
+        if videos.isEmpty, homeTab == .recommend {
+            let cached = FeedCache.load()
+            if !cached.isEmpty {
+                videos = cached
+                homePager.hasMore = false
+                Perf.milestone("launch.firstFeed", "source=cache count=\(cached.count)")
+            }
+        }
 
         do {
             try await core.start()
@@ -1691,6 +1701,7 @@ final class AppModel {
             if isInitial, homeRequest == request { isLoading = false }
         }
 
+        if isInitial { Perf.begin("feed.load") }
         do {
             let items = try await fetchRecommend(freshIndex: freshIndex)
             guard homeRequest == request else { return }
@@ -1698,6 +1709,9 @@ final class AppModel {
                 videos = items
                 homePager.nextPage = 1
                 homePager.hasMore = !items.isEmpty
+                Perf.end("feed.load", "tab=recommend count=\(items.count)")
+                Perf.milestone("launch.firstFeed", "source=network count=\(items.count)")
+                FeedCache.save(items)
             } else {
                 _ = appendUnique(items, to: &videos)
                 homePager.nextPage = freshIndex + 1
@@ -4976,6 +4990,7 @@ final class AppModel {
 
     func openVideo(_ video: VideoItem) {
         if currentVideo?.bvid == video.bvid { return }
+        Perf.begin("video.firstFrame")
         closeLiveRoom()
         closeAnimeSeason()
         closeArticle()

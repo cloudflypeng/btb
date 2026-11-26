@@ -121,13 +121,13 @@ struct RootView: View {
     @ViewBuilder
     private var content: some View {
         switch model.coreState {
-        case .starting:
+        case .starting where model.videos.isEmpty:
             StartupView()
         case .failed(let message):
             CoreFailureView(message: message) {
                 Task { await model.restartCore() }
             }
-        case .ready:
+        case .ready, .starting:
             backgroundContent
                 .id(backgroundID)
                 .opacity(model.currentVideo == nil || !transition.isSettled ? 1 : 0)

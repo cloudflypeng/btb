@@ -311,6 +311,7 @@ final class MobilePlaybackController: NSObject {
                     isLoading = false
                     isReady = true
                     didReachEnd = false
+                    Perf.end("video.firstFrame", "platform=ios")
                     if autoplay {
                         player?.play()
                         applyRate()

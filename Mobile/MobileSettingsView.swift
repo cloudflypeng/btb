@@ -285,6 +285,8 @@ struct MobileSettingsView: View {
                     .monospacedDigit()
             }
             settingsDivider
+            BtbCacheSettingsRow()
+            settingsDivider
             VStack(alignment: .leading, spacing: 6) {
                 Text("隐私")
                     .font(.system(size: 13.5, weight: .medium))
