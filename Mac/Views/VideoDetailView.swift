@@ -52,7 +52,12 @@ struct VideoDetailView: View {
 #if DEBUG
                 let environment = ProcessInfo.processInfo.environment
                 if environment["BTB_SCROLL_COMMENTS"] == "1" {
-                    try? await Task.sleep(nanoseconds: 400_000_000)
+                    // Wait until the detail and comments have laid out; scrolling to an
+                    // anchor that doesn't exist yet leaves the offset past the content.
+                    for _ in 0..<50 where model.comments.isEmpty || isContentLoading {
+                        try? await Task.sleep(nanoseconds: 100_000_000)
+                    }
+                    try? await Task.sleep(nanoseconds: 200_000_000)
                     let anchor = environment["BTB_THREAD_ROOT"]
                         .flatMap(Int64.init)
                         .map { "thread-\($0)" } ?? "comments"

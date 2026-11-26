@@ -29,7 +29,7 @@ BTB 的三条原则：
 | D5 | 起播需要依次执行 `player.resolve` → `stream.start` → AVPlayer 缓冲，点击前没有任何预热 | 播放链路 | 首帧慢 |
 | D6 | 弹幕每条一个 `CATextLayer`，高密度时图层数量爆炸 | `Shared/UI/DanmakuOverlay.swift` | 高能段落掉帧、发热 |
 | D7 | 没有性能基线和自动化度量 | — | 优化效果无法验证 |
-| D8 | Mac 详情页通过 `scrollTo` 跳到评论区后，左栏内容区出现大片空白（v0.1.3 已存在） | `Mac/Views/VideoDetailView.swift` | 跳转后看不到评论，归入 A4 一起修复 |
+| D8 | Mac 详情页通过 `scrollTo` 跳到评论区后，左栏内容区出现大片空白（v0.1.3 已存在）。复查：手动滚动正常，只在调试用的自动跳转中复现；已让自动跳转等内容加载完再执行，空白仍在，根因未定位 | `Mac/Views/VideoDetailView.swift` | 低；留到 C 阶段重做详情页布局时一并处理 |
 
 ---
 
@@ -135,3 +135,28 @@ BTB 的三条原则：
 2. **iPad**：E5 是否纳入 v1？
 3. **F1 SponsorBlock 类数据**：需要请求第三方社区服务（只发送 BV 号），是否接受？
 4. **G3**：是否有 Apple Developer 账号可以用于签名和公证？
+
+---
+
+## 6. 进度记录
+
+### 第 1 阶段 地基（2026-11-26）
+
+| 项 | 状态 | 结果 |
+|---|---|---|
+| A1 | ✅ | `Shared/Core/Perf.swift`：signpost + `perf:` 日志；`scripts/perf.sh` / `make perf` 汇总 n/min/p50/max |
+| A2 | ✅ | `Shared/UI/BtbImage.swift` 重写：CDN `@{w}w.webp` 按尺寸取图、ImageIO 后台下采样解码、按字节限额的内存缓存 + 200MB 磁盘缓存；设置页新增「图片缓存」大小与清除 |
+| A3 | ✅ | 首页 feed 卡片出现时预取后续封面（iOS 4 张、Mac 12 张） |
+| A4 | ✅（第一步） | `AppModel` 6097 行拆为核心 739 行 + 16 个领域扩展文件（每个 ≤ 501 行），行为不变。第二步：把各领域状态拆成独立 `@Observable` Store，放到 C 阶段按页面逐个迁移，避免一次性大改 |
+| A5 | ✅ | 首页推荐落盘缓存，冷启动先显示缓存；有缓存时不再显示启动遮罩 |
+
+实测（Mac，Debug，M 系列）：
+
+| 指标 | 改前 | 改后 |
+|---|---|---|
+| 冷启动到首页出内容 | 1070 ms（必须等网络） | **184–229 ms**（缓存） |
+| 首页网络刷新 | — | 397–426 ms |
+
+iOS 模拟器：缓存命中后 `launch.firstFeed` 与 `launch.startCalled` 只差 2ms，说明 App 内部已无阻塞；剩余约 1.7s 是模拟器的进程拉起和场景创建（日志中可见约 1s 空白发生在系统场景握手阶段），需要真机测量。
+
+新发现（归入 B 阶段）：播放器通过每 200ms 轮询 `AVPlayerItem.status` 判断就绪，首帧平均多等约 100ms，B2 改为 KVO。
