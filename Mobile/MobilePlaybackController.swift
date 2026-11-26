@@ -90,6 +90,8 @@ final class MobilePlaybackController: NSObject {
     @ObservationIgnored private var interruptionObserver: NSObjectProtocol?
     @ObservationIgnored private var resumeAfterInterruption = false
     @ObservationIgnored private var pipController: AVPictureInPictureController?
+    /// Lock screen / Control Center / Dynamic Island mirroring (B5).
+    @ObservationIgnored private let nowPlaying = PlaybackNowPlaying()
 
     override init() {
         let defaults = UserDefaults.standard
@@ -110,6 +112,7 @@ final class MobilePlaybackController: NSObject {
         defaultCodec = codec.isEmpty ? "hevc" : codec
         isMuted = defaults.bool(forKey: "player.muted")
         super.init()
+        configureNowPlaying()
         interruptionObserver = NotificationCenter.default.addObserver(
             forName: AVAudioSession.interruptionNotification,
             object: nil,
@@ -476,6 +479,7 @@ final class MobilePlaybackController: NSObject {
             player.pause()
             isPlaying = false
             reportProgress(event: "pause", seconds: currentTime)
+            refreshNowPlaying()
         } else {
             if didReachEnd || (duration > 0 && currentTime >= duration - 0.2) {
                 player.seek(to: .zero)
@@ -487,6 +491,7 @@ final class MobilePlaybackController: NSObject {
             applyRate()
             isPlaying = true
         }
+        refreshNowPlaying()
     }
 
     func seek(to seconds: Double) async {
@@ -500,6 +505,7 @@ final class MobilePlaybackController: NSObject {
         currentTime = target
         didReachEnd = false
         reportProgress(event: "seek", seconds: target)
+        refreshNowPlaying()
     }
 
     func seekBy(_ delta: Double) {
@@ -567,6 +573,7 @@ final class MobilePlaybackController: NSObject {
         autoplayTask = nil
         autoplayCountdown = nil
         nextVideo = nil
+        refreshNowPlaying()
     }
 
     func attach(playerLayer: AVPlayerLayer) {
@@ -601,6 +608,7 @@ final class MobilePlaybackController: NSObject {
         }
         pipController?.delegate = nil
         pipController = nil
+        nowPlaying.clear()
         teardownPlayer()
         monitorTask?.cancel()
         monitorTask = nil
@@ -653,12 +661,14 @@ final class MobilePlaybackController: NSObject {
         currentTime = duration
         reportProgress(event: "end", seconds: duration)
         scheduleAutoplay()
+        refreshNowPlaying()
     }
 
     private func scheduleAutoplay() {
         guard autoplayNext, let model, let video else { return }
         guard let next = model.relatedVideos.first(where: { $0.bvid != video.bvid }) else { return }
         nextVideo = next
+        refreshNowPlaying()
         autoplayCountdown = 3
         autoplayTask?.cancel()
         autoplayTask = Task { @MainActor in
@@ -717,6 +727,7 @@ final class MobilePlaybackController: NSObject {
                 try? await Task.sleep(nanoseconds: 15_000_000_000)
                 guard !Task.isCancelled, isReady, isPlaying else { continue }
                 reportProgress(event: "heartbeat", seconds: currentTime)
+                refreshNowPlaying()
             }
         }
     }
@@ -838,6 +849,51 @@ final class MobilePlaybackController: NSObject {
         guard resume > 3 else { return 0 }
         guard total <= 0 || resume < total - 2 else { return 0 }
         return resume
+    }
+
+    // MARK: Now Playing (B5)
+
+    private func configureNowPlaying() {
+        nowPlaying.onPlay = { [weak self] in
+            guard let self, let player = self.player else { return }
+            player.play()
+            self.applyRate()
+            self.isPlaying = true
+        }
+        nowPlaying.onPause = { [weak self] in
+            self?.player?.pause()
+            self?.isPlaying = false
+        }
+        nowPlaying.onTogglePlayPause = { [weak self] in
+            self?.togglePlayback()
+        }
+        nowPlaying.onSeek = { [weak self] seconds in
+            Task { @MainActor in await self?.seek(to: seconds) }
+        }
+        nowPlaying.onNext = { [weak self] in
+            guard let self, let next = self.nextVideo else { return }
+            self.onRequestPlayNext?(next)
+        }
+    }
+
+    /// Pushes the current state to the system. Cheap; called on every state
+    /// change rather than on a timer.
+    private func refreshNowPlaying() {
+        guard let video else { return }
+        nowPlaying.activate()
+        nowPlaying.canPlayNext = nextVideo != nil
+        let title = resolved?.title ?? video.title
+        let artist = video.ownerName
+        let rate = isPlaying ? playbackRate : 0
+        nowPlaying.update(
+            title: title,
+            artist: artist,
+            duration: duration,
+            elapsed: currentTime,
+            rate: rate,
+            coverURL: video.coverURL,
+            bvid: video.bvid
+        )
     }
 
     private func playbackMessage(_ error: Error) -> String {
