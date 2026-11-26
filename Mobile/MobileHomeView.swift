@@ -1,22 +1,94 @@
 import SwiftUI
 
+private struct BarsHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 56
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
+/// Reports how far the feed has scrolled, on iOS 18+ via `ScrollGeometry`.
+/// On iOS 17 there is no reliable offset feed, so the bars simply stay put.
+private struct FeedScrollOffsetObserver: ViewModifier {
+    let onChange: (_ old: CGFloat, _ new: CGFloat) -> Void
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, *) {
+            content.onScrollGeometryChange(for: CGFloat.self) { geometry in
+                geometry.contentOffset.y + geometry.contentInsets.top
+            } action: { old, new in
+                onChange(old, new)
+            }
+        } else {
+            content
+        }
+    }
+}
+
 struct MobileHomeView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.colorScheme) private var scheme
 
+    /// #1: the header and tab bar collapse while the list scrolls down.
+    @State private var barsHidden = false
+    @State private var barsHeight: CGFloat = 56
+    /// #2: one scroll anchor per (tab, filter), so coming back lands where you left.
+    @State private var topIDs: [String: String] = [:]
+    @State private var currentTopID: String?
+    /// #3: bumping this scrolls the list back to the top.
+    @State private var scrollToTopToken = 0
+    /// Restoring a tab's anchor moves the offset in one jump; that jump must
+    /// not be read as "the user scrolled down" (#2).
+    @State private var suppressBarTracking = false
+
+    private var tabKey: String { model.homeSnapshotKey }
+
     var body: some View {
+        // Full-bleed top: cards scroll away under the status bar instead of
+        // stopping below it, so the list really does vanish into the phone's
+        // top edge once the bars have tucked away.
         VStack(spacing: 0) {
-            header
-            tabBar
-            if model.homeTab == .categories {
-                filterBar
+            VStack(spacing: 0) {
+                header
+                tabBar
+                if model.homeTab == .categories {
+                    filterBar
+                }
             }
-            Divider().opacity(0.5)
+            .padding(.top, MobileSafeArea.top)
+            .background(
+                GeometryReader { proxy in
+                    Color.clear.preference(key: BarsHeightKey.self, value: proxy.size.height)
+                }
+            )
+            .frame(height: barsHidden ? 0 : barsHeight, alignment: .top)
+            .clipped()
+            .opacity(barsHidden ? 0 : 1)
+            .animation(BtbMotion.snappy, value: barsHidden)
+
+            Divider().opacity(barsHidden ? 0 : 0.5)
             feed
         }
+        .ignoresSafeArea(.container, edges: .top)
         .background(AppTheme.background(scheme))
         .toolbar(.hidden, for: .navigationBar)
         .animation(BtbMotion.smooth, value: model.homeTab)
+        .onPreferenceChange(BarsHeightKey.self) { height in
+            if height > 20 { barsHeight = height }
+        }
+        .onChange(of: currentTopID) { _, newValue in
+            topIDs[tabKey] = newValue
+        }
+        .onChange(of: tabKey) { _, _ in
+            currentTopID = topIDs[tabKey]
+            barsHidden = false
+            suppressBarTracking = true
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 450_000_000)
+                suppressBarTracking = false
+            }
+        }
     }
 
     private var header: some View {
@@ -50,6 +122,8 @@ struct MobileHomeView: View {
         .padding(.horizontal, 14)
         .padding(.top, 6)
         .padding(.bottom, 10)
+        // #3: double tap the logo for "back to the top, refreshed".
+        .onTapGesture(count: 2) { scrollToTopAndRefresh() }
     }
 
     private var tabBar: some View {
@@ -60,6 +134,13 @@ struct MobileHomeView: View {
                         guard model.homeTab != tab else { return }
                         Task { await model.selectHomeTab(tab) }
                     }
+                    // #3: double tapping the current tab refreshes it.
+                    .simultaneousGesture(
+                        TapGesture(count: 2).onEnded {
+                            guard model.homeTab == tab else { return }
+                            scrollToTopAndRefresh()
+                        }
+                    )
                 }
             }
             .padding(.horizontal, 14)
@@ -75,6 +156,12 @@ struct MobileHomeView: View {
                         guard model.homeFilter != filter else { return }
                         Task { await model.selectHomeFilter(filter) }
                     }
+                    .simultaneousGesture(
+                        TapGesture(count: 2).onEnded {
+                            guard model.homeFilter == filter else { return }
+                            scrollToTopAndRefresh()
+                        }
+                    )
                 }
             }
             .padding(.horizontal, 14)
@@ -82,57 +169,107 @@ struct MobileHomeView: View {
         .padding(.bottom, 9)
     }
 
+    private func scrollToTopAndRefresh() {
+        if barsHidden {
+            withAnimation(BtbMotion.snappy) { barsHidden = false }
+        }
+        scrollToTopToken += 1
+        topIDs[tabKey] = nil
+        currentTopID = nil
+        Task {
+            await model.refreshHome()
+            topIDs[tabKey] = nil
+            currentTopID = nil
+            // The refreshed list replaces the old one under the same scroll
+            // offset, so a second nudge after it lands is what actually
+            // leaves the feed at the top (#3).
+            try? await Task.sleep(nanoseconds: 120_000_000)
+            scrollToTopToken += 1
+        }
+    }
+
     private var feed: some View {
-        ScrollView {
-            LazyVStack(spacing: 24) {
-                if let error = model.errorMessage, model.videos.isEmpty {
-                    MobileErrorBanner(text: error) {
-                        Task { await model.loadHome() }
-                    }
-                    .padding(.horizontal, 14)
-                    .padding(.top, 10)
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(spacing: 0) {
+                    Color.clear
+                        .frame(height: 0)
+                        .id("home.feed.top")
+                    feedContent
+                }
+                .padding(.top, 14)
+                .padding(.bottom, 18)
+                .animation(BtbMotion.smooth, value: model.isLoading)
+            }
+            .scrollIndicators(.hidden)
+            .modifier(FeedScrollOffsetObserver { old, new in
+                guard !suppressBarTracking else { return }
+                // Direction-driven: scrolling down tucks the bars away,
+                // scrolling up (anywhere in the list) brings them back, so a
+                // tab switch is reachable from deep inside a feed (#1, #2).
+                let moved = new - old
+                if new <= 12, barsHidden {
+                    withAnimation(BtbMotion.snappy) { barsHidden = false }
+                } else if moved > 6, new > 60, !barsHidden {
+                    withAnimation(BtbMotion.snappy) { barsHidden = true }
+                } else if moved < -6, barsHidden {
+                    withAnimation(BtbMotion.snappy) { barsHidden = false }
+                }
+            })
+            .scrollPosition(id: $currentTopID, anchor: .top)
+            .onChange(of: scrollToTopToken) { _, _ in
+                proxy.scrollTo("home.feed.top", anchor: .top)
+            }
+            .id(model.homeTab)
+            // C6: switching tabs slides the new list in from the side.
+            .transition(
+                .asymmetric(
+                    insertion: .move(edge: .trailing).combined(with: .opacity),
+                    removal: .move(edge: .leading).combined(with: .opacity)
+                )
+            )
+            .refreshable {
+                await model.refreshHome()
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var feedContent: some View {
+        LazyVStack(spacing: 24) {
+            if let error = model.errorMessage, model.videos.isEmpty {
+                MobileErrorBanner(text: error) {
+                    Task { await model.loadHome() }
+                }
+                .padding(.horizontal, 14)
+                .padding(.top, 10)
+            }
+
+            if model.isLoading && model.videos.isEmpty {
+                ForEach(0..<3, id: \.self) { _ in
+                    MobileFeedSkeleton()
+                }
+                .transition(.opacity)
+            } else if model.videos.isEmpty && !model.isLoading {
+                emptyState
+                    .transition(.opacity)
+            } else {
+                ForEach(model.videos) { video in
+                    MobileFeedCard(video: video)
+                        .prefetchCovers(model.videos, after: video, lookahead: 4)
+                        .staggeredEntrance(model.videos.firstIndex(where: { $0.id == video.id }) ?? 0)
                 }
 
-                if model.isLoading && model.videos.isEmpty {
-                    ForEach(0..<3, id: \.self) { _ in
-                        MobileFeedSkeleton()
-                    }
-                    .transition(.opacity)
-                } else if model.videos.isEmpty && !model.isLoading {
-                    emptyState
-                        .transition(.opacity)
-                } else {
-                    ForEach(model.videos) { video in
-                        MobileFeedCard(video: video)
-                            .prefetchCovers(model.videos, after: video, lookahead: 4)
-                            .staggeredEntrance(model.videos.firstIndex(where: { $0.id == video.id }) ?? 0)
-                    }
-
-                    InfiniteScrollFooter(
-                        isLoading: model.isLoading || model.homePager.isLoadingMore,
-                        hasMore: model.homePager.hasMore,
-                        failed: model.homePager.failed
-                    ) {
-                        Task { await model.loadHomeMore() }
-                    }
+                InfiniteScrollFooter(
+                    isLoading: model.isLoading || model.homePager.isLoadingMore,
+                    hasMore: model.homePager.hasMore,
+                    failed: model.homePager.failed
+                ) {
+                    Task { await model.loadHomeMore() }
                 }
             }
-            .padding(.top, 14)
-            .padding(.bottom, 18)
-            .animation(BtbMotion.smooth, value: model.isLoading)
         }
-        .scrollIndicators(.hidden)
-        .id(model.homeTab)
-        // C6: switching tabs slides the new list in from the side.
-        .transition(
-            .asymmetric(
-                insertion: .move(edge: .trailing).combined(with: .opacity),
-                removal: .move(edge: .leading).combined(with: .opacity)
-            )
-        )
-        .refreshable {
-            await model.loadHome()
-        }
+        .scrollTargetLayout()
     }
 
     private var emptyState: some View {

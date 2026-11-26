@@ -210,6 +210,8 @@ final class AppModel {
     var videos: [VideoItem] = []
     var isLoading = false
     var errorMessage: String?
+    /// Per-tab feed cache, so switching tabs does not throw the list away (#2).
+    var homeSnapshots: [String: HomeSnapshot] = [:]
 
     var recentUPs: [RecentUP] = []
     var isLoadingRecentUPs = false
@@ -709,19 +711,32 @@ final class AppModel {
     }
 
     func selectHomeTab(_ tab: HomeTab) async {
+        guard tab != homeTab || homeFilter != .all else { return }
+        saveHomeSnapshot()
         homeTab = tab
+        homeFilter = .all
         section = .home
         closeVideo()
         closeUP()
+        if restoreHomeSnapshot(for: homeSnapshotKey) { return }
         await loadHome()
     }
 
     func selectHomeFilter(_ filter: HomeFilter) async {
+        guard homeTab != .categories || homeFilter != filter else { return }
+        saveHomeSnapshot()
         homeFilter = filter
         homeTab = .categories
         section = .home
         closeVideo()
         closeUP()
+        if restoreHomeSnapshot(for: homeSnapshotKey) { return }
+        await loadHome()
+    }
+
+    /// #3: pull-to-refresh from a double tap on the tab or the logo.
+    func refreshHome() async {
+        dropHomeSnapshot(homeSnapshotKey)
         await loadHome()
     }
 

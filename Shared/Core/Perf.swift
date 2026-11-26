@@ -59,9 +59,12 @@ enum Perf {
 
 #if DEBUG
 /// Debug-only line to stdout, flushed immediately for device log capture.
+/// Also mirrored through `NSLog` so `simctl log stream` sees it on the simulator.
 @inline(__always)
 func btbDebugLog(_ message: @autoclosure () -> String) {
-    print(message())
+    let text = message()
+    print(text)
     fflush(stdout)
+    NSLog("%@", text)
 }
 #endif

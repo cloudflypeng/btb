@@ -151,7 +151,15 @@ extension AppModel {
         navigationPath = [video]
     }
 
-    func closeVideo() {
+    /// Closes the detail page. Pass the video the page was showing: when the
+    /// player switches straight from one video to the next, the outgoing view's
+    /// `onDisappear` can run *after* the incoming one has already opened, and
+    /// clearing the state then would abort that video's comment and related
+    /// fetches mid-flight.
+    func closeVideo(bvid: String? = nil) {
+        if let bvid, bvid != detailBVID, bvid != currentVideo?.bvid {
+            return
+        }
         navigationPath.removeAll()
         detailBVID = nil
     }

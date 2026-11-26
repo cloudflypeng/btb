@@ -38,6 +38,7 @@ struct MobileLoginView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var mode: LoginMode = .phone
+    @State private var isAddingAccount = false
     @FocusState private var focusedField: Field?
 
     private enum LoginMode: Hashable {
@@ -58,12 +59,31 @@ struct MobileLoginView: View {
                         accountSection
                         Divider()
                     }
-                    modePicker
-                    switch mode {
-                    case .phone:
-                        phoneSection
-                    case .qr:
-                        qrSection
+                    // #10: with an account already signed in, the login form
+                    // stays out of the way until "添加账号" asks for it.
+                    if model.accounts.isEmpty || isAddingAccount {
+                        modePicker
+                        switch mode {
+                        case .phone:
+                            phoneSection
+                        case .qr:
+                            qrSection
+                        }
+                    } else {
+                        Button {
+                            isAddingAccount = true
+                            if mode == .qr, model.qrPayload == nil {
+                                Task { await model.beginQRLogin() }
+                            }
+                        } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: "plus.circle")
+                                Text("添加账号")
+                            }
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(AppTheme.brand)
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
                 .padding(18)

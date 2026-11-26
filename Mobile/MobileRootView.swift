@@ -96,8 +96,10 @@ struct MobileRootView: View {
             .environment(router)
             .modifier(PlayerZoomTransition(bvid: router.rootVideo?.bvid, namespace: playerTransition))
             .presentationDetents([.large])
-            .presentationDragIndicator(.visible)
-            .presentationCornerRadius(16)
+            // #4: no handle, no rounded top — the page fills the screen and the
+            // status-bar strip above the video is black.
+            .presentationDragIndicator(.hidden)
+            .presentationCornerRadius(0)
             .presentationBackground(AppTheme.background(scheme))
             .sheet(isPresented: $model.isLoginSheetPresented) {
                 MobileLoginView()

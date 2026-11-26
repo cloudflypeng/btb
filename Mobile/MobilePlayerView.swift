@@ -9,13 +9,20 @@ struct MobilePlayerView: View {
     @Environment(MobileRouter.self) private var router
     @Environment(\.colorScheme) private var scheme
     @State private var isCommentsExpanded = false
+    /// Owned here so the progress line under the video can read it.
+    @State private var playback = MobilePlaybackController()
 
     var body: some View {
         VStack(spacing: 0) {
-            MobileVideoPlayer(video: video)
+            // Pinned under the Dynamic Island; the black above it is the
+            // status-bar area, not a gap.
+            MobileVideoPlayer(video: video, playback: playback)
                 .aspectRatio(16.0 / 9.0, contentMode: .fit)
-                .background(.black)
+                .background(Color.black)
+                .background(Color.black.ignoresSafeArea(edges: .top))
                 .zIndex(1)
+
+            PlayerProgressLine(playback: playback)
 
             MobileVideoActionBar(video: video, detail: detail)
 
@@ -41,34 +48,21 @@ struct MobilePlayerView: View {
         .toolbar(.hidden, for: .navigationBar)
         .toolbar(.hidden, for: .tabBar)
         .navigationBarBackButtonHidden(true)
-        .overlay(alignment: .topLeading) {
-            Button {
-                router.dismiss()
-            } label: {
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 15, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 36, height: 36)
-                    .background(.black.opacity(0.5), in: Circle())
-            }
-            .buttonStyle(.plain)
-            .padding(.leading, 12)
-            .padding(.top, 8)
-        }
         .task(id: video.bvid) {
             #if DEBUG
             btbDebugLog("detail: task bvid=\(video.bvid)")
             #endif
             isCommentsExpanded = false
             model.openVideo(video)
+            await playback.load(video: video, model: model)
             await model.loadDownloads()
-            await model.loadWatchPage(for: video)
+            await model.loadWatchPage(for: video, force: true)
         }
         .onDisappear {
             #if DEBUG
             btbDebugLog("detail: disappear bvid=\(video.bvid)")
             #endif
-            model.closeVideo()
+            model.closeVideo(bvid: video.bvid)
         }
     }
 
@@ -103,55 +97,49 @@ struct MobilePlayerView: View {
         }
     }
 
+    // #5: the avatar is the way into the UP's page — no separate 主页 button,
+    // no "UP 主" caption — and follow is a small pill beside it.
     private var ownerRow: some View {
-        HStack(spacing: 10) {
-            AvatarView(url: ownerAvatar, size: 40)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(ownerName)
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(AppTheme.text(scheme))
-                    .lineLimit(1)
-                Text("UP 主")
-                    .font(.system(size: 11))
-                    .foregroundStyle(AppTheme.secondary(scheme))
-            }
-
-            Spacer(minLength: 8)
-
-            if let mid = model.detail?.owner?.mid ?? video.ownerMid {
+        HStack(spacing: 8) {
+            Button {
+                guard let mid = ownerMid else { return }
+                router.pushUP(MobileUPRoute(mid: mid, name: ownerName, avatarURL: ownerAvatar))
+            } label: {
                 HStack(spacing: 8) {
-                    Button {
-                        router.pushUP(
-                            MobileUPRoute(mid: mid, name: ownerName, avatarURL: ownerAvatar)
-                        )
-                    } label: {
-                        Text("主页")
-                            .font(.system(size: 12.5, weight: .semibold))
-                            .foregroundStyle(AppTheme.text(scheme))
-                            .padding(.horizontal, 14)
-                            .frame(height: 33)
-                            .background(AppTheme.chip(scheme), in: Capsule())
-                    }
-                    .buttonStyle(.plain)
-
-                    Button {
-                        Task { await model.toggleFollow() }
-                    } label: {
-                        Text(model.relation?.attention == true ? "已关注" : "关注")
-                            .font(.system(size: 12.5, weight: .semibold))
-                            .foregroundStyle(model.relation?.attention == true ? AppTheme.secondary(scheme) : .white)
-                            .padding(.horizontal, 16)
-                            .frame(height: 33)
-                            .background(
-                                model.relation?.attention == true ? AppTheme.chip(scheme) : AppTheme.brand,
-                                in: Capsule()
-                            )
-                    }
-                    .buttonStyle(.plain)
+                    AvatarView(url: ownerAvatar, size: 32)
+                    Text(ownerName)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(AppTheme.text(scheme))
+                        .lineLimit(1)
                 }
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
+            .disabled(ownerMid == nil)
+
+            if let ownerMid {
+                Button {
+                    Task { await model.toggleFollow() }
+                } label: {
+                    Text(model.relation?.attention == true ? "已关注" : "关注")
+                        .font(.system(size: 11.5, weight: .semibold))
+                        .foregroundStyle(model.relation?.attention == true ? AppTheme.secondary(scheme) : .white)
+                        .padding(.horizontal, 11)
+                        .frame(height: 25)
+                        .background(
+                            model.relation?.attention == true ? AppTheme.chip(scheme) : AppTheme.brand,
+                            in: Capsule()
+                        )
+                }
+                .buttonStyle(.plain)
+            }
+
+            Spacer(minLength: 0)
         }
+    }
+
+    private var ownerMid: Int64? {
+        model.detail?.owner?.mid ?? video.ownerMid
     }
 
     private var ownerName: String {
@@ -399,10 +387,11 @@ struct MobileVideoRow: View {
 }
 struct MobileVideoPlayer: View {
     let video: VideoItem
+    /// Owned by `MobilePlayerView`, shared with the progress line below the video.
+    let playback: MobilePlaybackController
 
     @Environment(AppModel.self) private var model
     @Environment(MobileRouter.self) private var router
-    @State private var playback = MobilePlaybackController()
     @State private var fullscreenHost: LandscapePlayerHost?
 
     var body: some View {
@@ -420,7 +409,12 @@ struct MobileVideoPlayer: View {
                     router.open(next)
                 }
             }
-            await playback.load(video: video, model: model)
+        }
+        .onAppear {
+            UIDevice.current.beginGeneratingDeviceOrientationNotifications()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
+            handleDeviceRotation()
         }
         .onDisappear {
             guard fullscreenHost == nil else { return }
@@ -440,11 +434,26 @@ struct MobileVideoPlayer: View {
         }
     }
 
+    /// #7: the app is portrait-only, so turning the phone is the only way into
+    /// fullscreen — and turning it back is the only way out.
+    private func handleDeviceRotation() {
+        let orientation = UIDevice.current.orientation
+        guard orientation.isValidInterfaceOrientation else { return }
+        if orientation.isLandscape {
+            guard fullscreenHost == nil, playback.isReady else { return }
+            enterFullscreen()
+        } else if orientation == .portrait {
+            guard fullscreenHost != nil else { return }
+            exitFullscreen()
+        }
+    }
+
     @MainActor
     private func enterFullscreen() {
         guard fullscreenHost == nil else { return }
         let top = UIApplication.shared.topViewController()
         guard let top else { return }
+        MobileOrientation.shared.setAllowsLandscape(true)
         let canvas = MobilePlayerCanvas(playback: playback, isFullscreen: true) {
             exitFullscreen()
         }
@@ -457,8 +466,11 @@ struct MobileVideoPlayer: View {
         host.modalPresentationStyle = .fullScreen
         host.modalTransitionStyle = .crossDissolve
         fullscreenHost = host
-        top.present(host, animated: false) {
-            requestVideoOrientation(.landscapeRight)
+        let side: UIInterfaceOrientation = UIDevice.current.orientation == .landscapeLeft
+            ? .landscapeLeft
+            : .landscapeRight
+        top.present(host, animated: true) {
+            requestVideoOrientation(side == .landscapeLeft ? .landscapeLeft : .landscapeRight)
         }
     }
 
@@ -466,7 +478,8 @@ struct MobileVideoPlayer: View {
     private func exitFullscreen() {
         guard let host = fullscreenHost else { return }
         fullscreenHost = nil
-        host.dismiss(animated: false) {
+        host.dismiss(animated: true) {
+            MobileOrientation.shared.setAllowsLandscape(false)
             requestVideoOrientation(.portrait)
         }
     }
@@ -511,16 +524,15 @@ struct MobilePlayerCanvas: View {
                 isFill: $isFill,
                 onSingleTap: {
                     guard playback.isReady else { return }
-                    withAnimation(BtbMotion.snappy) {
-                        showControls.toggle()
-                    }
-                    if showControls { scheduleControlsHide() }
+                    // #6: a tap on the picture is play / pause.
+                    playback.togglePlayback()
+                    withAnimation(BtbMotion.snappy) { showControls = true }
+                    scheduleControlsHide()
                 },
                 onDoubleTap: {
                     guard playback.isReady else { return }
-                    playback.togglePlayback()
-                    showControls = true
-                    scheduleControlsHide()
+                    withAnimation(BtbMotion.snappy) { showControls.toggle() }
+                    if showControls { scheduleControlsHide() }
                 }
             )
 
@@ -586,22 +598,12 @@ struct MobilePlayerCanvas: View {
                 autoplayCard(next: next, countdown: countdown)
             }
 
-            if playback.isReady, showControls, !playback.isPlaying,
-               playback.autoplayCountdown == nil, playback.errorMessage == nil {
-                Button {
-                    playback.togglePlayback()
-                    scheduleControlsHide()
-                } label: {
-                    Image(systemName: "play.fill")
-                        .font(.system(size: 24, weight: .bold))
-                        .foregroundStyle(.white)
-                        .frame(width: 60, height: 60)
-                        .background(.black.opacity(0.46), in: Circle())
-                }
-                .buttonStyle(.plain)
-            }
-
+            // #6: play / pause and seeking live in the middle of the picture;
+            // the bar below keeps the other functions.
             if playback.isReady, showControls, !playback.isPiPActive {
+                centerControls
+                    .transition(.opacity)
+
                 controls
             }
 
@@ -649,55 +651,64 @@ struct MobilePlayerCanvas: View {
         }
     }
 
+    private var centerControls: some View {
+        HStack(spacing: isFullscreen ? 44 : 30) {
+            centerButton("gobackward.15", size: isFullscreen ? 54 : 44) {
+                skip(-15)
+            }
+            .accessibilityLabel("后退 15 秒")
+
+            centerButton(playback.isPlaying ? "pause.fill" : "play.fill", size: isFullscreen ? 72 : 62) {
+                playback.togglePlayback()
+                scheduleControlsHide()
+            }
+            .accessibilityLabel(playback.isPlaying ? "暂停" : "播放")
+
+            centerButton("goforward.15", size: isFullscreen ? 54 : 44) {
+                skip(15)
+            }
+            .accessibilityLabel("前进 15 秒")
+        }
+    }
+
+    private func centerButton(
+        _ icon: String,
+        size: CGFloat,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: size * 0.38, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: size, height: size)
+                .background(.black.opacity(0.42), in: Circle())
+        }
+        .buttonStyle(BtbPressableStyle(scale: 0.92, haptic: false))
+    }
+
+    private func skip(_ delta: Double) {
+        guard playback.duration > 0 else { return }
+        playback.seekBy(delta)
+        showControls = true
+        scheduleControlsHide()
+    }
+
     private var controls: some View {
         VStack {
             Spacer()
 
             HStack(spacing: isFullscreen ? 14 : 9) {
-                Button {
-                    playback.togglePlayback()
-                    showControls = true
-                    scheduleControlsHide()
-                } label: {
-                    Image(systemName: playback.isPlaying ? "pause.fill" : "play.fill")
-                        .font(.system(size: isFullscreen ? 17 : 13, weight: .bold))
-                        .foregroundStyle(.white)
-                        .frame(width: isFullscreen ? 34 : 26, height: isFullscreen ? 34 : 26)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(playback.isPlaying ? "暂停" : "播放")
-
                 Text(MobileFormat.seconds(playback.isScrubbing ? playback.scrubTime : playback.currentTime))
                     .font(.system(size: 10, weight: .medium).monospacedDigit())
                     .foregroundStyle(.white.opacity(0.9))
                     .frame(width: 42, alignment: .trailing)
 
-                Slider(
-                    value: Binding(
-                        get: { playback.isScrubbing ? playback.scrubTime : playback.currentTime },
-                        set: { playback.scrubTime = $0 }
-                    ),
-                    in: 0...max(playback.duration, 0.1),
-                    onEditingChanged: { editing in
-                        if editing {
-                            playback.isScrubbing = true
-                            showControls = true
-                            hideControlsTask?.cancel()
-                        } else {
-                            playback.finishScrub()
-                            scheduleControlsHide()
-                        }
-                    }
-                )
-                .tint(.white)
-                .disabled(playback.duration <= 0)
-                // C4: the thumb lands where the picture does.
-                .sensoryFeedback(.impact(weight: .light), trigger: playback.isScrubbing)
-
                 Text(MobileFormat.seconds(playback.duration))
                     .font(.system(size: 10, weight: .medium).monospacedDigit())
                     .foregroundStyle(.white.opacity(0.62))
                     .frame(width: 42, alignment: .leading)
+
+                Spacer(minLength: 0)
 
                 Button {
                     if model.hasAccount {

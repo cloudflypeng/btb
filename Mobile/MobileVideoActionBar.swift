@@ -30,7 +30,7 @@ struct MobileVideoActionBar: View {
             .buttonStyle(BtbPressableStyle(scale: 0.9))
         }
         .padding(.horizontal, 6)
-        .frame(height: 58)
+        .frame(height: 40)
         .background(AppTheme.background(scheme))
         .overlay(alignment: .bottom) {
             Rectangle().fill(AppTheme.divider(scheme)).frame(height: 0.5)
@@ -225,6 +225,7 @@ struct MobileVideoActionBar: View {
 
 private struct ActionCell: View {
     let icon: String
+    /// Kept for VoiceOver and the triple-tap ring; the row itself is icons only (#8).
     let label: String
     var isActive = false
     /// 0...1 ring drawn around the icon while a long-press is building up.
@@ -233,31 +234,24 @@ private struct ActionCell: View {
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        VStack(spacing: 4) {
-            Image(systemName: icon)
-                .font(.system(size: 20, weight: .regular))
-                .symbolEffect(.bounce, value: isActive)
-                .contentTransition(.symbolEffect(.replace))
-                .frame(width: 30, height: 26)
-                .overlay {
-                    Circle()
-                        .trim(from: 0, to: progress)
-                        .stroke(AppTheme.brand, style: StrokeStyle(lineWidth: 2, lineCap: .round))
-                        .rotationEffect(.degrees(-90))
-                        .frame(width: 34, height: 34)
-                        .opacity(progress > 0 ? 1 : 0)
-                }
-            Text(label)
-                .font(.system(size: 11, weight: .medium))
-                .monospacedDigit()
-                .lineLimit(1)
-                .contentTransition(.numericText())
-        }
-        .foregroundStyle(isActive ? AppTheme.brand : AppTheme.secondary(scheme))
-        .frame(maxWidth: .infinity)
-        .frame(height: 50)
-        .contentShape(Rectangle())
-        .animation(BtbMotion.snappy, value: label)
-        .animation(BtbMotion.snappy, value: isActive)
+        Image(systemName: icon)
+            .font(.system(size: 18, weight: .regular))
+            .symbolEffect(.bounce, value: isActive)
+            .contentTransition(.symbolEffect(.replace))
+            .frame(width: 30, height: 30)
+            .overlay {
+                Circle()
+                    .trim(from: 0, to: progress)
+                    .stroke(AppTheme.brand, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                    .frame(width: 34, height: 34)
+                    .opacity(progress > 0 ? 1 : 0)
+            }
+            .foregroundStyle(isActive ? AppTheme.brand : AppTheme.secondary(scheme))
+            .frame(maxWidth: .infinity)
+            .frame(height: 40)
+            .contentShape(Rectangle())
+            .accessibilityLabel(label)
+            .animation(BtbMotion.snappy, value: isActive)
     }
 }
