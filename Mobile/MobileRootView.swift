@@ -79,7 +79,10 @@ struct MobileRootView: View {
         .overlay {
             launchOverlay
         }
-        .sheet(isPresented: $router.isPlayerPresented) {
+        // #8: the player is a full-screen cover, not a sheet — no drag handle,
+        // no swipe-to-dismiss, and leaving it is an explicit back button that
+        // also stops the video.
+        .fullScreenCover(isPresented: $router.isPlayerPresented) {
             NavigationStack(path: $router.path) {
                 if let video = router.rootVideo {
                     MobilePlayerView(video: video)
@@ -95,11 +98,6 @@ struct MobileRootView: View {
             .environment(model)
             .environment(router)
             .modifier(PlayerZoomTransition(bvid: router.rootVideo?.bvid, namespace: playerTransition))
-            .presentationDetents([.large])
-            // #4: no handle, no rounded top — the page fills the screen and the
-            // status-bar strip above the video is black.
-            .presentationDragIndicator(.hidden)
-            .presentationCornerRadius(0)
             .presentationBackground(AppTheme.background(scheme))
             .sheet(isPresented: $model.isLoginSheetPresented) {
                 MobileLoginView()

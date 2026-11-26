@@ -102,7 +102,7 @@ private struct HomeBars: View {
         .padding(.horizontal, 14)
         .padding(.top, 6)
         .padding(.bottom, 10)
-        // #3: double tap the logo for "back to the top, refreshed".
+        // Double tap the logo for "back to the top".
         .onTapGesture(count: 2) { onTop() }
     }
 
@@ -110,17 +110,15 @@ private struct HomeBars: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
                 ForEach(HomeTab.allCases) { tab in
+                    // YouTube's rule: tapping the tab you are already on takes
+                    // you back to the top. Refreshing stays on pull-to-refresh.
                     MobilePill(title: tab.title, isSelected: model.homeTab == tab) {
-                        guard model.homeTab != tab else { return }
+                        guard model.homeTab != tab else {
+                            onTop()
+                            return
+                        }
                         Task { await model.selectHomeTab(tab) }
                     }
-                    // #3: double tapping the current tab refreshes it.
-                    .simultaneousGesture(
-                        TapGesture(count: 2).onEnded {
-                            guard model.homeTab == tab else { return }
-                            onTop()
-                        }
-                    )
                 }
             }
             .padding(.horizontal, 14)
@@ -133,15 +131,12 @@ private struct HomeBars: View {
             HStack(spacing: 8) {
                 ForEach(HomeFilter.allCases) { filter in
                     MobilePill(title: filter.title, isSelected: model.homeFilter == filter) {
-                        guard model.homeFilter != filter else { return }
+                        guard model.homeFilter != filter else {
+                            onTop()
+                            return
+                        }
                         Task { await model.selectHomeFilter(filter) }
                     }
-                    .simultaneousGesture(
-                        TapGesture(count: 2).onEnded {
-                            guard model.homeFilter == filter else { return }
-                            onTop()
-                        }
-                    )
                 }
             }
             .padding(.horizontal, 14)
@@ -165,6 +160,9 @@ struct MobileHomeView: View {
     /// Restoring a tab's anchor moves the offset in one jump; that jump must
     /// not be read as "the user scrolled down" (#2).
     @State private var suppressBarTracking = false
+    /// Cards stagger in only while the first screen settles; afterwards the
+    /// list must appear instantly as it is scrolled.
+    @State private var entranceActive = true
 
     private var tabKey: String { model.homeSnapshotKey }
 
@@ -197,10 +195,15 @@ struct MobileHomeView: View {
         .onChange(of: tabKey) { _, _ in
             currentTopID = topIDs[tabKey]
             bars.hidden = false
+            entranceActive = true
             suppressBarTracking = true
             Task { @MainActor in
                 try? await Task.sleep(nanoseconds: 450_000_000)
                 suppressBarTracking = false
+            }
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 1_200_000_000)
+                entranceActive = false
             }
         }
     }
@@ -212,16 +215,18 @@ struct MobileHomeView: View {
         scrollToTopToken += 1
         topIDs[tabKey] = nil
         currentTopID = nil
-        Task {
-            await model.refreshHome()
-            topIDs[tabKey] = nil
-            currentTopID = nil
-            // The refreshed list replaces the old one under the same scroll
-            // offset, so a second nudge after it lands is what actually
-            // leaves the feed at the top (#3).
+        // The list may be lazily realised, so nudge once more after the jump.
+        Task { @MainActor in
             try? await Task.sleep(nanoseconds: 120_000_000)
             scrollToTopToken += 1
         }
+    }
+
+    /// The rows that stagger in: only the first screenful, and only once.
+    private func entranceIndex(for video: VideoItem) -> Int? {
+        guard entranceActive else { return nil }
+        guard let index = model.videos.firstIndex(where: { $0.id == video.id }), index < 4 else { return nil }
+        return index
     }
 
     private var feed: some View {
@@ -235,7 +240,6 @@ struct MobileHomeView: View {
                 }
                 .padding(.top, 14)
                 .padding(.bottom, 18)
-                .animation(BtbMotion.smooth, value: model.isLoading)
             }
             .scrollIndicators(.hidden)
             .modifier(FeedScrollOffsetObserver { old, new in
@@ -293,7 +297,7 @@ struct MobileHomeView: View {
                 ForEach(model.videos) { video in
                     MobileFeedCard(video: video)
                         .prefetchCovers(model.videos, after: video, lookahead: 4)
-                        .staggeredEntrance(model.videos.firstIndex(where: { $0.id == video.id }) ?? 0)
+                        .staggeredEntrance(entranceIndex(for: video))
                 }
 
                 InfiniteScrollFooter(

@@ -116,15 +116,23 @@ private struct StaggeredEntrance: ViewModifier {
             .offset(y: shown || reduceMotion ? 0 : 10)
             .onAppear {
                 guard !shown else { return }
-                let delay = min(Double(index) * 0.03, 0.36)
+                let delay = min(Double(index) * 0.03, 0.24)
                 withAnimation(BtbMotion.smooth.delay(delay)) { shown = true }
             }
     }
 }
 
 extension View {
-    func staggeredEntrance(_ index: Int) -> some View {
-        modifier(StaggeredEntrance(index: index))
+    /// First-screen entrance. `nil` leaves the card alone, which is what you
+    /// want for everything that appears while scrolling or loading more —
+    /// replaying a fade-and-slide per card reads as the list flickering.
+    @ViewBuilder
+    func staggeredEntrance(_ index: Int?) -> some View {
+        if let index {
+            modifier(StaggeredEntrance(index: index))
+        } else {
+            self
+        }
     }
 }
 

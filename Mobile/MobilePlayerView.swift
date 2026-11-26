@@ -13,15 +13,23 @@ struct MobilePlayerView: View {
     @State private var playback = MobilePlaybackController()
     /// D2: scrub-bar frames for this video.
     @State private var thumbnails = VideoThumbnails()
+    /// Rotation is the app's own: the sheet rotates, and the video takes the
+    /// whole screen while the phone is sideways (#7 rework).
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
+
+    private var isLandscape: Bool { verticalSizeClass == .compact }
 
     var body: some View {
         ZStack(alignment: .top) {
             // The strip above the video (status bar / Dynamic Island area) is
             // black, not page background.
             Color.black
-                .ignoresSafeArea(edges: .top)
+                .ignoresSafeArea()
             page
         }
+        .statusBarHidden(isLandscape)
+        .onAppear { MobileOrientation.shared.setAllowsLandscape(true) }
+        .onDisappear { MobileOrientation.shared.setAllowsLandscape(false) }
         .toolbar(.hidden, for: .navigationBar)
         .toolbar(.hidden, for: .tabBar)
         .navigationBarBackButtonHidden(true)
@@ -59,34 +67,72 @@ struct MobilePlayerView: View {
         VStack(spacing: 0) {
             // Pinned straight under the Dynamic Island: the black above it is
             // the status-bar strip, and the progress line hugs its bottom edge.
-            MobileVideoPlayer(video: video, playback: playback, thumbnails: thumbnails)
-                .aspectRatio(16.0 / 9.0, contentMode: .fit)
-                .background(Color.black)
+            MobileVideoPlayer(
+                video: video,
+                playback: playback,
+                thumbnails: thumbnails,
+                fillsScreen: isLandscape
+            )
+            .background(Color.black)
 
-            PlayerProgressLine(playback: playback)
-                .zIndex(2)
+            if !isLandscape {
+                PlayerProgressLine(playback: playback)
+                    .zIndex(2)
 
-            MobileVideoActionBar(video: video, detail: detail)
+                MobileVideoActionBar(video: video, detail: detail)
 
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 20) {
-                    VStack(alignment: .leading, spacing: 14) {
-                        titleSection
-                        descriptionSection
-                        ownerRow
-                    }
-                    Divider()
-                    commentsSection
-                    Divider()
-                    relatedSection
-                }
-                .padding(.horizontal, 16)
-                .padding(.top, 16)
-                .padding(.bottom, 30)
+                videoDetails
             }
-            .scrollIndicators(.hidden)
         }
         .background(AppTheme.background(scheme))
+        // #8: the page is a full-screen cover now, so leaving it is this
+        // button — the video stops with it. It floats over the picture, as in
+        // YouTube, and is the only chrome the page keeps in landscape.
+        .overlay(alignment: .topLeading) {
+            Button(action: closePlayer) {
+                Image(systemName: "chevron.backward")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 36, height: 36)
+                    .background(.black.opacity(0.42), in: Circle())
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("返回")
+            // Landscape fills the screen edge to edge, so the button has to
+            // step in past the notch itself; portrait already sits inside the
+            // safe area under the status bar.
+            .padding(.leading, isLandscape ? MobileSafeArea.leading + 12 : 12)
+            .padding(.top, isLandscape ? MobileSafeArea.top + 10 : 8)
+        }
+    }
+
+    /// Leaves the page and ends the playback with it: no audio keeps running
+    /// behind the home feed, no floating window.
+    private func closePlayer() {
+        playback.stop()
+        model.closeVideo(bvid: video.bvid)
+        router.dismiss()
+    }
+
+    private var videoDetails: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 20) {
+                VStack(alignment: .leading, spacing: 14) {
+                    titleSection
+                    descriptionSection
+                    ownerRow
+                }
+                Divider()
+                commentsSection
+                Divider()
+                relatedSection
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 16)
+            .padding(.bottom, 30)
+        }
+        .scrollIndicators(.hidden)
     }
 
     private var detail: VideoInfoData? {
@@ -414,20 +460,33 @@ struct MobileVideoPlayer: View {
     let playback: MobilePlaybackController
     /// D2: frames for the scrub preview.
     var thumbnails: VideoThumbnails?
+    /// Landscape: the canvas takes the whole screen instead of its 16:9 slot.
+    var fillsScreen = false
 
     @Environment(AppModel.self) private var model
     @Environment(MobileRouter.self) private var router
-    @State private var fullscreenHost: LandscapePlayerHost?
 
     var body: some View {
-        MobilePlayerCanvas(playback: playback, isFullscreen: false, thumbnails: thumbnails) {
-            enterFullscreen()
+        let canvas = MobilePlayerCanvas(
+            playback: playback,
+            isFullscreen: fillsScreen,
+            thumbnails: thumbnails
+        ) {
+            toggleFullscreen()
         }
-        .aspectRatio(16.0 / 9.0, contentMode: .fit)
+
+        // One view either way, so turning the phone never tears the player
+        // down and back up; only its frame changes.
+        Group {
+            if fillsScreen {
+                canvas.ignoresSafeArea()
+            } else {
+                canvas.aspectRatio(16.0 / 9.0, contentMode: .fit)
+            }
+        }
         .background(.black)
         .task {
             playback.onRequestPlayNext = { next in
-                exitFullscreen()
                 if router.isPlayerPresented {
                     router.play(next)
                 } else {
@@ -435,78 +494,22 @@ struct MobileVideoPlayer: View {
                 }
             }
         }
-        .onAppear {
-            UIDevice.current.beginGeneratingDeviceOrientationNotifications()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
-            handleDeviceRotation()
-        }
         .onDisappear {
-            guard fullscreenHost == nil else { return }
-            // B6: leaving the page while playing keeps the video alive in a
-            // floating window instead of cutting it off mid-sentence.
+            // Still the page's own video (a pushed UP page covered it): keep
+            // playing. Otherwise the page is gone or now shows something else,
+            // and this playback has to end with it (#8).
             if router.isPlayerPresented, router.rootVideo?.bvid == video.bvid {
                 return
             }
-            if router.isPlayerPresented {
-                // The sheet stayed up and now shows another video: this one is done.
-                playback.stop()
-                return
-            }
-            if !playback.detachToPiP() {
-                playback.stop()
-            }
+            playback.stop()
         }
     }
 
-    /// #7: the app is portrait-only, so turning the phone is the only way into
-    /// fullscreen — and turning it back is the only way out.
-    private func handleDeviceRotation() {
-        let orientation = UIDevice.current.orientation
-        guard orientation.isValidInterfaceOrientation else { return }
-        if orientation.isLandscape {
-            guard fullscreenHost == nil, playback.isReady else { return }
-            enterFullscreen()
-        } else if orientation == .portrait {
-            guard fullscreenHost != nil else { return }
-            exitFullscreen()
-        }
-    }
-
-    @MainActor
-    private func enterFullscreen() {
-        guard fullscreenHost == nil else { return }
-        let top = UIApplication.shared.topViewController()
-        guard let top else { return }
-        MobileOrientation.shared.setAllowsLandscape(true)
-        let canvas = MobilePlayerCanvas(playback: playback, isFullscreen: true, thumbnails: thumbnails) {
-            exitFullscreen()
-        }
-        .environment(model)
-        .ignoresSafeArea()
-        .statusBarHidden(true)
-        .persistentSystemOverlays(.hidden)
-        .preferredColorScheme(.dark)
-        let host = LandscapePlayerHost(rootView: AnyView(canvas))
-        host.modalPresentationStyle = .fullScreen
-        host.modalTransitionStyle = .crossDissolve
-        fullscreenHost = host
-        let side: UIInterfaceOrientation = UIDevice.current.orientation == .landscapeLeft
-            ? .landscapeLeft
-            : .landscapeRight
-        top.present(host, animated: true) {
-            requestVideoOrientation(side == .landscapeLeft ? .landscapeLeft : .landscapeRight)
-        }
-    }
-
-    @MainActor
-    private func exitFullscreen() {
-        guard let host = fullscreenHost else { return }
-        fullscreenHost = nil
-        host.dismiss(animated: true) {
-            MobileOrientation.shared.setAllowsLandscape(false)
-            requestVideoOrientation(.portrait)
-        }
+    /// #7: turning the phone is the only way into fullscreen, and turning it
+    /// back is the only way out. The button does the same thing by asking for
+    /// the other orientation.
+    private func toggleFullscreen() {
+        requestVideoOrientation(fillsScreen ? .portrait : .landscapeRight)
     }
 }
 
@@ -636,12 +639,15 @@ struct MobilePlayerCanvas: View {
             }
 
             if isFullscreen, showControls {
+                // Top-right, away from the page's back button: one leaves the
+                // page, the other only turns the phone back upright.
                 VStack {
                     HStack {
+                        Spacer()
                         Button {
                             onToggleFullscreen()
                         } label: {
-                            Image(systemName: "chevron.down")
+                            Image(systemName: "arrow.down.right.and.arrow.up.left")
                                 .font(.system(size: 15, weight: .bold))
                                 .foregroundStyle(.white)
                                 .frame(width: 36, height: 36)
@@ -649,10 +655,9 @@ struct MobilePlayerCanvas: View {
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel("退出全屏")
-                        Spacer()
                     }
-                    .padding(.leading, 16)
-                    .padding(.top, 20)
+                    .padding(.trailing, MobileSafeArea.trailing + 16)
+                    .padding(.top, MobileSafeArea.top + 20)
                     Spacer()
                 }
             }
@@ -865,12 +870,6 @@ struct MobilePlayerCanvas: View {
             }
         }
     }
-}
-
-final class LandscapePlayerHost: UIHostingController<AnyView> {
-    override var supportedInterfaceOrientations: UIInterfaceOrientationMask { .landscape }
-    override var prefersStatusBarHidden: Bool { true }
-    override var prefersHomeIndicatorAutoHidden: Bool { true }
 }
 
 @MainActor
