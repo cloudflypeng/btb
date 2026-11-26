@@ -16,6 +16,7 @@ struct MobileHomeView: View {
         }
         .background(AppTheme.background(scheme))
         .toolbar(.hidden, for: .navigationBar)
+        .animation(BtbMotion.smooth, value: model.homeTab)
     }
 
     private var header: some View {
@@ -96,12 +97,15 @@ struct MobileHomeView: View {
                     ForEach(0..<3, id: \.self) { _ in
                         MobileFeedSkeleton()
                     }
+                    .transition(.opacity)
                 } else if model.videos.isEmpty && !model.isLoading {
                     emptyState
+                        .transition(.opacity)
                 } else {
                     ForEach(model.videos) { video in
                         MobileFeedCard(video: video)
                             .prefetchCovers(model.videos, after: video, lookahead: 4)
+                            .staggeredEntrance(model.videos.firstIndex(where: { $0.id == video.id }) ?? 0)
                     }
 
                     InfiniteScrollFooter(
@@ -115,8 +119,17 @@ struct MobileHomeView: View {
             }
             .padding(.top, 14)
             .padding(.bottom, 18)
+            .animation(BtbMotion.smooth, value: model.isLoading)
         }
         .scrollIndicators(.hidden)
+        .id(model.homeTab)
+        // C6: switching tabs slides the new list in from the side.
+        .transition(
+            .asymmetric(
+                insertion: .move(edge: .trailing).combined(with: .opacity),
+                removal: .move(edge: .leading).combined(with: .opacity)
+            )
+        )
         .refreshable {
             await model.loadHome()
         }
@@ -198,13 +211,20 @@ struct MobileFeedSkeleton: View {
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
+        // C7: same metrics as MobileFeedCard, so the swap never shifts the list.
         VStack(alignment: .leading, spacing: 10) {
             Rectangle()
                 .fill(AppTheme.surface(scheme))
                 .aspectRatio(16.0 / 9.0, contentMode: .fit)
             VStack(alignment: .leading, spacing: 10) {
                 SkeletonBar(height: 15)
-                SkeletonBar(width: 210, height: 12)
+                SkeletonBar(width: 210, height: 15)
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(AppTheme.surface(scheme))
+                        .frame(width: 22, height: 22)
+                    SkeletonBar(width: 130, height: 12)
+                }
             }
             .padding(.horizontal, 14)
         }

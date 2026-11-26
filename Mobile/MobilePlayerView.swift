@@ -691,6 +691,8 @@ struct MobilePlayerCanvas: View {
                 )
                 .tint(.white)
                 .disabled(playback.duration <= 0)
+                // C4: the thumb lands where the picture does.
+                .sensoryFeedback(.impact(weight: .light), trigger: playback.isScrubbing)
 
                 Text(MobileFormat.seconds(playback.duration))
                     .font(.system(size: 10, weight: .medium).monospacedDigit())

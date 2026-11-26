@@ -102,6 +102,32 @@ private struct BtbPressableBody: View {
     }
 }
 
+/// C6: a card fades and rises into place the first time it appears, offset by
+/// 30 ms per position so a fresh list settles as a wave rather than a snap.
+private struct StaggeredEntrance: ViewModifier {
+    let index: Int
+
+    @State private var shown = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(shown ? 1 : 0)
+            .offset(y: shown || reduceMotion ? 0 : 10)
+            .onAppear {
+                guard !shown else { return }
+                let delay = min(Double(index) * 0.03, 0.36)
+                withAnimation(BtbMotion.smooth.delay(delay)) { shown = true }
+            }
+    }
+}
+
+extension View {
+    func staggeredEntrance(_ index: Int) -> some View {
+        modifier(StaggeredEntrance(index: index))
+    }
+}
+
 enum BtbDimens {
     static let radiusSmall: CGFloat = 8
     static let radiusCard: CGFloat = 12

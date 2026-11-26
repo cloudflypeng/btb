@@ -36,6 +36,10 @@ struct MobileVideoActionBar: View {
             Rectangle().fill(AppTheme.divider(scheme)).frame(height: 0.5)
         }
         .sensoryFeedback(.success, trigger: tripleTick)
+        // C4: quiet confirmation for the actions that change server state.
+        .sensoryFeedback(.success, trigger: coined) { _, new in new > 0 }
+        .sensoryFeedback(.success, trigger: favorited) { _, new in new }
+        .sensoryFeedback(.selection, trigger: model.watchLaterVideos.contains(video.bvid)) { _, saved in saved }
         .onChange(of: model.relation == nil) { _, isNil in
             if !isNil, baseline == nil { baseline = model.relation }
         }
@@ -253,7 +257,7 @@ private struct ActionCell: View {
         .frame(maxWidth: .infinity)
         .frame(height: 50)
         .contentShape(Rectangle())
-        .animation(.spring(duration: 0.3, bounce: 0.2), value: label)
-        .animation(.spring(duration: 0.3, bounce: 0.2), value: isActive)
+        .animation(BtbMotion.snappy, value: label)
+        .animation(BtbMotion.snappy, value: isActive)
     }
 }
