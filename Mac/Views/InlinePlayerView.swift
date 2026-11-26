@@ -265,6 +265,14 @@ struct InlinePlayerView: View {
         }
         .task(id: player.map { ObjectIdentifier($0) }) {
             guard player != nil else { return }
+#if DEBUG
+            if ProcessInfo.processInfo.environment["BTB_FLOAT"] == "1" {
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                if let player {
+                    FloatingPlayerWindow.shared.show(player: player, video: video)
+                }
+            }
+#endif
             await monitorPlayback()
         }
         .onDisappear {
@@ -399,6 +407,18 @@ struct InlinePlayerView: View {
             if let subtitles = resolved?.subtitles, !subtitles.isEmpty {
                 subtitleMenu(subtitles)
             }
+
+            Button {
+                FloatingPlayerWindow.shared.toggle(player: player, video: video)
+            } label: {
+                Image(systemName: FloatingPlayerWindow.shared.isShowing ? "pip.exit" : "pip.enter")
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundStyle(FloatingPlayerWindow.shared.isShowing ? AppTheme.brand : .white.opacity(0.86))
+                    .frame(width: 24, height: 24)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(FloatingPlayerWindow.shared.isShowing ? "关闭悬浮小窗" : "悬浮小窗")
 
             Button {
                 toggleTheater()
@@ -1320,6 +1340,7 @@ struct InlinePlayerView: View {
     }
 
     private func teardown() {
+        FloatingPlayerWindow.shared.closeOwned(by: video.bvid)
         hideControlsTask?.cancel()
         hideControlsTask = nil
         clearStatusObservation()

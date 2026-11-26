@@ -116,6 +116,19 @@ struct RootView: View {
         .onDisappear {
             model.shutdown()
         }
+#if DEBUG
+        .task {
+            // Screenshot/QA hook: open the first feed video without a click.
+            guard ProcessInfo.processInfo.environment["BTB_OPEN_FIRST"] == "1" else { return }
+            for _ in 0..<40 {
+                if model.coreState == .ready, let first = model.videos.first {
+                    model.openVideo(first)
+                    return
+                }
+                try? await Task.sleep(nanoseconds: 250_000_000)
+            }
+        }
+#endif
     }
 
     @ViewBuilder

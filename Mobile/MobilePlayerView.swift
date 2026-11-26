@@ -423,7 +423,18 @@ struct MobileVideoPlayer: View {
             await playback.load(video: video, model: model)
         }
         .onDisappear {
-            if fullscreenHost == nil {
+            guard fullscreenHost == nil else { return }
+            // B6: leaving the page while playing keeps the video alive in a
+            // floating window instead of cutting it off mid-sentence.
+            if router.isPlayerPresented, router.rootVideo?.bvid == video.bvid {
+                return
+            }
+            if router.isPlayerPresented {
+                // The sheet stayed up and now shows another video: this one is done.
+                playback.stop()
+                return
+            }
+            if !playback.detachToPiP() {
                 playback.stop()
             }
         }

@@ -112,6 +112,12 @@ struct MobileRootView: View {
             guard model.hasAccount else { return }
             await model.loadMessageUnread(force: true)
         }
+        .onAppear {
+            // B6: the PiP expand button brings the player page back.
+            MobilePiPSession.onRestore = { video in
+                router.open(video)
+            }
+        }
         .onChange(of: model.coreState) { _, state in
             guard state == .ready else { return }
             if model.hasAccount {
@@ -157,6 +163,12 @@ struct MobileRootView: View {
                 try? await Task.sleep(nanoseconds: pressMS * 1_000_000)
                 Perf.milestone("autoOpen.tap", "press=\(pressMS) ms")
                 router.open(first)
+                // B6: leave the page while it plays, to exercise the PiP hand-off
+                // on a device that cannot be tapped from the automation host.
+                guard let closeMS = Int(debugOption("BTB_AUTO_CLOSE") ?? ""), closeMS > 0 else { return }
+                try? await Task.sleep(nanoseconds: UInt64(closeMS) * 1_000_000)
+                Perf.milestone("autoClose.dismiss", "after=\(closeMS) ms")
+                router.dismiss()
             }
             return
         }

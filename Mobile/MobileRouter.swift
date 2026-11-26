@@ -13,12 +13,15 @@ final class MobileRouter {
     var path: [MobileSheetRoute] = []
 
     func open(_ video: VideoItem) {
+        // Opening the same video again takes over from its floating window.
+        MobilePiPSession.end(forBVID: video.bvid, stopPlayback: true)
         rootVideo = video
         path = []
         isPlayerPresented = true
     }
 
     func play(_ video: VideoItem) {
+        MobilePiPSession.end(forBVID: video.bvid, stopPlayback: true)
         rootVideo = video
         path = []
     }

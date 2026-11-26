@@ -167,8 +167,10 @@ iOS 模拟器：缓存命中后 `launch.firstFeed` 与 `launch.startCalled` 只�
 |---|---|---|
 | B1 | ✅ | 卡片按下即 `player.resolve` + `stream.start`（`Shared/AppModel/AppModel+Prewarm.swift`、`Shared/Core/PlaybackPrewarmCache.swift`）。点击时若预解析仍在飞行中则**并入**（按已耗时预算决定是否等待），不再重复请求；缓存 60s，最多 3 个流会话，过期/被淘汰时 `stream.stop` 回收 |
 | B2 | ✅ | `AVPlayerItem.status` 改为 KVO；首帧改由 `AVPlayerLayer.isReadyForDisplay` 判定，封面常驻并交叉淡出（0.22s 缓动），全程无黑屏。轮询版平均多等的约 100ms 已去除 |
-| B3 | ✅（简化版） | bbcore `stream.start` 的 4 个 init/index 区间与 2 个首段校验改为并发（`internal/service/stream_gateway.go`），首播等待从 ~600ms 降到 ~250ms；AVPlayer 起播缓冲 1s，首帧后再放宽到 6s。低码率多档切换未做：当前单档起播已达标，等弱网数据再决定是否引入多 variant |
+| B3 | ✅（简化版） | bbcore `stream.start` 的 4 个 init/index 区间与 2 个首段校验改为并发（`internal/service/stream_gateway.go`），首播等待从 ~600ms 降到 ~250ms；建流时顺手在后台把第一条音/视频段拉进内存（6MB 上限，随会话回收），AVPlayer 的首个 range 请求直接以 206 命中内存，不再等 CDN（`proxyTrack`）。AVPlayer 起播缓冲 1s，首帧后再放宽到 6s。低码率多档切换未做：当前单档起播已达标，等弱网数据再决定是否引入多 variant |
 | B4 | ✅ | `Shared/Core/PlaybackProgressStore.swift` 本地记录每个视频位置（4s 防抖落盘，600 条上限），与云端历史取较远者续播；首页卡片、相关视频行、宫格卡片封面底部显示进度条 |
+| B5 | ✅ | `Mobile/PlaybackNowPlaying.swift`：`MPNowPlayingInfoCenter` 写入标题/UP 主/封面/进度/时长/速率，`MPRemoteCommandCenter` 接播放、暂停、切换、拖动、下一集；就绪、切集、拖动、播完与 15s 心跳时刷新。真机日志 `nowplaying: "黎曼猜想为何是低垂果实？低垂果实是什么梗？" rate=1.0 duration=417s`，锁屏与灵动岛同步显示 |
+| B6 | ✅ | iOS：离开播放页时若仍在播放，自动进入系统画中画（`Mobile/MobilePiPSession.swift`）。AVKit 的 PiP 绑在 `AVPlayerLayer` 上，页面销毁时它会一起断，所以会话把同一 `AVPlayer` 挂到一个置底的整窗图层（root view 不透明，看不见但持续渲染），并由它持有播放控制器——播放、进度上报、锁屏信息都不中断；点画中画还原按钮回按记忆位置重开播放页，暂停或播完离开则不留浮窗。Mac：控制条新增「悬浮小窗」（`Mac/FloatingPlayerWindow.swift`），`NSPanel` 置顶、可拖动缩放、跨空间，与页面共用同一个 `AVPlayer`，关闭播放页时一并关闭。真机验证 `pip: started` 后 15s 心跳 `seconds=14 pip=true`（页面已关，播放仍在推进）；模拟器 `isPictureInPictureSupported()` 为 false，走无浮窗直接停止的分支 |
 
 实测（**iPhone Air 真机**，Debug，`devicectl ... --console` 读取 `perf:` 行）：
 
@@ -179,6 +181,7 @@ iOS 模拟器：缓存命中后 `launch.firstFeed` 与 `launch.startCalled` 只�
 | 预解析（含 playurl） | 300–350 ms |
 | 预解析 + 建流 | 540–970 ms |
 | 播放器自建流（未命中预热） | 641 → 92 ms（并入命中时）；未命中时 210–420 ms |
+| 首段内存缓存生效后单次复测 | `play.resolve 82ms` → `play.stream 253ms` → 首帧 **603ms**，播放正常推进（19s 内进度 13.7s / 1210s） |
 
 补充：bbcore 里 `player.resolve` 与 `stream.start` 会各调一次 playurl，已加 45s 短期缓存（按 cid/清晰度/fnval/账号，忽略 bvid/aid），首个预热建流命中时 `play.stream` 直接 0ms。
 

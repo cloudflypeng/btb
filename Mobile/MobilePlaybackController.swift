@@ -595,8 +595,24 @@ final class MobilePlaybackController: NSObject {
         }
     }
 
+    /// Called by `MobilePiPSession` when the detached floating window starts or stops.
+    func setPiPActive(_ active: Bool) {
+        isPiPActive = active
+    }
+
+    /// Hands playback to a floating window when the page goes away. Returns
+    /// `false` when playback has nothing worth keeping (paused, finished).
+    func detachToPiP() -> Bool {
+        guard let video else { return false }
+        if let pipController, pipController.isPictureInPictureActive {
+            pipController.stopPictureInPicture()
+        }
+        return MobilePiPSession.start(playback: self, video: video)
+    }
+
     func stop() {
         cancelAutoplay()
+        MobilePiPSession.endAll(stopPlayback: false)
         if isReady, !didReachEnd {
             reportProgress(event: "pause", seconds: currentTime)
         }
@@ -662,6 +678,11 @@ final class MobilePlaybackController: NSObject {
         reportProgress(event: "end", seconds: duration)
         scheduleAutoplay()
         refreshNowPlaying()
+        // A floating window showing the last frame of a finished video is noise;
+        // the autoplay countdown belongs to the player page.
+        if let bvid = video?.bvid {
+            MobilePiPSession.end(forBVID: bvid, stopPlayback: false)
+        }
     }
 
     private func scheduleAutoplay() {
@@ -726,6 +747,7 @@ final class MobilePlaybackController: NSObject {
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 15_000_000_000)
                 guard !Task.isCancelled, isReady, isPlaying else { continue }
+                Perf.milestone("progress.heartbeat", "seconds=\(Int(currentTime)) pip=\(isPiPActive)")
                 reportProgress(event: "heartbeat", seconds: currentTime)
                 refreshNowPlaying()
             }
