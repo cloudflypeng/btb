@@ -191,3 +191,16 @@ iOS 模拟器同路径：tap → 首帧 621ms（流走网络）/ 426ms 级（解
 1. `NSKeyValueObservedChange.newValue` 在 `.initial` 回调里是 `nil`，必须读 `observed.status`；
 2. 给视频层加 `opacity(0)` 会阻止 `AVPlayerLayer.isReadyForDisplay` 变真，首帧永远等超时——封面必须是叠在**可见**视频层之上的遮罩；
 3. 重定向到 pipe 时 stdout 是全缓冲，`devicectl --console` 会吞掉尾部日志，调试打印需 `fflush`。
+
+### 第 3 阶段 动效与转场（2026-11-26）
+
+| 项 | 状态 | 结果 |
+|---|---|---|
+| C1 | ✅ | 播放页用 `.matchedTransitionSource` + `.navigationTransition(.zoom)`：从被点卡片的封面放大成播放页，下拉关闭时缩回原卡片；命名空间从根注入 `EnvironmentValues.playerTransitionNamespace`，所有列表（首页、搜索、收藏、相关视频）自动生效。iOS 17 保持原来的上滑（zoom 需要 iOS 18） |
+| C2 | ✅ | `BtbMotion` 只剩三组弹簧：`snappy`(0.3/0.85)、`smooth`(0.45/1.0)、`bouncy`(0.5/0.7)；全工程 45 处手写 easeOut/easeInOut 一次替换；开启「减弱动态效果」时统一降级为 0.14s 线性淡入淡出，按压也不再缩放 |
+| C3 | ✅ | 卡片按下 0.97 + 高光（`brightness`）松手回弹；长按弹出预览：封面 + **静音自动播放**片段（复用按下预热，通常已在播），菜单为稍后再看 / 分享 / 缓存 |
+| C4 | ✅ | 投币、收藏、稍后看、拖动进度条起止均有触感（`sensoryFeedback`）；点赞与一键三连沿用已有实现 |
+| C5 | ✅（已有） | 长按点赞出现环形进度，完成触发一键三连，计数乐观更新 |
+| C6 | ✅ | 卡片首次出现时按位置错峰淡入上浮（30ms/张）；Tab 切换列表横向滑入；计数 `contentTransition(.numericText())`。**未做**：Tab 内容跟手拖拽（需要可拖拽分页容器，放到 E 阶段信息架构一起做） |
+| C7 | ✅ | 骨架屏与真实卡片同尺寸（两行标题 + UP 主行），加载完成原地淡入 |
+| C8 | ✅（第一版） | 播放器下方常驻操作栏，不随内容滚动；图标在上计数在下，激活态品牌色，长按点赞环形进度 + 一键三连；Mac 端操作栏与 UP 信息一起固定在播放器下 |

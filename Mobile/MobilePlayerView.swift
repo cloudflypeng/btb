@@ -479,6 +479,8 @@ struct MobilePlayerCanvas: View {
 
     @Environment(AppModel.self) private var model
     @State private var showControls = true
+    /// D1: pinch switches the video between fit (letterboxed) and fill (cropped).
+    @State private var isFill = false
     @State private var hideControlsTask: Task<Void, Never>?
     @State private var isSettingsPresented = false
     @State private var isComposerPresented = false
@@ -491,7 +493,7 @@ struct MobilePlayerCanvas: View {
             // reports `isReadyForDisplay` while it is actually rendering, and
             // the cover on top already hides the black frame.
             if let player = playback.player {
-                VideoSurface(player: player, playback: playback)
+                VideoSurface(player: player, playback: playback, isFill: isFill)
             }
 
             // B2: the cached cover stands in for the first frame, then fades
@@ -503,26 +505,24 @@ struct MobilePlayerCanvas: View {
                     .allowsHitTesting(false)
             }
 
-            Color.clear
-                .contentShape(Rectangle())
-                .gesture(
-                    TapGesture(count: 2)
-                        .onEnded {
-                            guard playback.isReady else { return }
-                            playback.togglePlayback()
-                            showControls = true
-                            scheduleControlsHide()
-                        }
-                        .exclusively(
-                            before: TapGesture().onEnded {
-                                guard playback.isReady else { return }
-                                withAnimation(BtbMotion.snappy) {
-                                    showControls.toggle()
-                                }
-                                if showControls { scheduleControlsHide() }
-                            }
-                        )
-                )
+            PlayerGestureOverlay(
+                playback: playback,
+                showControls: $showControls,
+                isFill: $isFill,
+                onSingleTap: {
+                    guard playback.isReady else { return }
+                    withAnimation(BtbMotion.snappy) {
+                        showControls.toggle()
+                    }
+                    if showControls { scheduleControlsHide() }
+                },
+                onDoubleTap: {
+                    guard playback.isReady else { return }
+                    playback.togglePlayback()
+                    showControls = true
+                    scheduleControlsHide()
+                }
+            )
 
             if playback.danmakuEnabled, playback.isReady {
                 DanmakuOverlay(
@@ -1091,6 +1091,8 @@ private struct MobileDanmakuComposer: View {
 struct VideoSurface: UIViewRepresentable {
     let player: AVPlayer
     var playback: MobilePlaybackController?
+    /// `true` crops to fill the frame instead of letterboxing (D1 pinch).
+    var isFill: Bool = false
 
     func makeUIView(context: Context) -> VideoSurfaceView {
         let view = VideoSurfaceView()
@@ -1101,6 +1103,7 @@ struct VideoSurface: UIViewRepresentable {
             playback?.markSurfaceReady()
         }
         view.player = player
+        view.isFill = isFill
         return view
     }
 
@@ -1114,6 +1117,7 @@ struct VideoSurface: UIViewRepresentable {
         if view.player !== player {
             view.player = player
         }
+        view.isFill = isFill
         view.notifyLayerReady()
     }
 }
@@ -1138,6 +1142,14 @@ final class VideoSurfaceView: UIView {
             playerLayer.player = newValue
             observeDisplayReadiness()
             notifyLayerReady()
+        }
+    }
+
+    /// D1: pinch switches between fit and fill.
+    var isFill: Bool = false {
+        didSet {
+            guard oldValue != isFill else { return }
+            playerLayer.videoGravity = isFill ? .resizeAspectFill : .resizeAspect
         }
     }
 
