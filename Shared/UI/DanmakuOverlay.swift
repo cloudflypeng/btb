@@ -178,13 +178,44 @@ private final class DanmakuDisplayView: UIView {
         guard isPlaying, let player else { return }
         let seconds = player.currentTime().seconds
         guard seconds.isFinite else { return }
-        renderer.render(at: seconds, size: bounds.size)
 #if DEBUG
+        let started = CACurrentMediaTime()
+        renderer.render(at: seconds, size: bounds.size)
+        logRenderCost(CACurrentMediaTime() - started)
         logDebugFPSIfNeeded()
+#else
+        renderer.render(at: seconds, size: bounds.size)
 #endif
     }
 
 #if DEBUG
+    private var renderCostSum = 0.0
+    private var renderCostMax = 0.0
+    private var renderCostFrames = 0
+    private var renderCostLoggedAt = CACurrentMediaTime()
+
+    /// Renderer CPU time per frame, so the 120Hz budget can be checked
+    /// without a profiler attached (`-BTB_DANMAKU_FPS 1`).
+    private func logRenderCost(_ seconds: Double) {
+        guard debugFPSEnabled else { return }
+        renderCostSum += seconds
+        renderCostMax = max(renderCostMax, seconds)
+        renderCostFrames += 1
+        let now = CACurrentMediaTime()
+        guard now - renderCostLoggedAt >= 2, renderCostFrames > 0 else { return }
+        let average = renderCostSum / Double(renderCostFrames) * 1000
+        btbDebugLog(String(
+            format: "danmaku.render avg=%.2fms max=%.2fms layers=%d",
+            average,
+            renderCostMax * 1000,
+            renderer.layerCount
+        ))
+        renderCostSum = 0
+        renderCostMax = 0
+        renderCostFrames = 0
+        renderCostLoggedAt = now
+    }
+
     private func logDebugFPSIfNeeded() {
         guard debugFPSEnabled else { return }
         debugFrames += 1
@@ -312,31 +343,165 @@ private final class DanmakuDisplayView: NSView {
 }
 #endif
 
+// MARK: - Text textures
+
+/// A comment's text, drawn once into a bitmap and reused for every frame it
+/// stays on screen.
+///
+/// The old renderer used a `CATextLayer` per comment, and each new layer ran
+/// CoreText layout and redrew its backing store on the main thread — a burst
+/// of comments arriving in the same second stuttered no matter how cheap
+/// moving them afterwards was. A layer whose `contents` is a finished CGImage
+/// only ever moves, and the textures for the next few seconds are drawn ahead
+/// of time on a background queue.
+private final class DanmakuTextCache {
+    static let shared = DanmakuTextCache()
+
+    private final class Box {
+        let image: CGImage
+        init(_ image: CGImage) { self.image = image }
+    }
+
+    private let cache = NSCache<NSString, Box>()
+    private let queue = DispatchQueue(label: "btb.danmaku.texture", qos: .userInitiated)
+    private let lock = NSLock()
+    private var queued: Set<String> = []
+
+    private init() {
+        cache.countLimit = 900
+        cache.totalCostLimit = 24 * 1024 * 1024
+    }
+
+    /// Renders now if the texture is not there yet: the first frame of a
+    /// comment that was not prewarmed must still show something.
+    func image(text: String, color: UInt32, fontSize: CGFloat, pixelScale: CGFloat) -> CGImage? {
+        let key = Self.key(text: text, color: color, fontSize: fontSize, pixelScale: pixelScale)
+        if let box = cache.object(forKey: key) { return box.image }
+        guard let image = Self.draw(text: text, color: color, fontSize: fontSize, pixelScale: pixelScale) else {
+            return nil
+        }
+        cache.setObject(Box(image), forKey: key, cost: image.bytesPerRow * image.height)
+        return image
+    }
+
+    /// Draws the textures the next few seconds of comments will need.
+    func prewarm(_ items: [DanmakuItem], pixelScale: CGFloat) {
+        guard !items.isEmpty else { return }
+        var payload: [(key: NSString, text: String, color: UInt32, fontSize: CGFloat)] = []
+        payload.reserveCapacity(items.count)
+        lock.lock()
+        for item in items {
+            let fontSize = CGFloat(item.fontSize)
+            let key = Self.key(text: item.text, color: item.colorValue, fontSize: fontSize, pixelScale: pixelScale)
+            guard cache.object(forKey: key) == nil, !queued.contains(key as String) else { continue }
+            queued.insert(key as String)
+            payload.append((key, item.text, item.colorValue, fontSize))
+        }
+        lock.unlock()
+        guard !payload.isEmpty else { return }
+
+        queue.async { [weak self] in
+            guard let self else { return }
+            for entry in payload {
+                guard let image = Self.draw(
+                    text: entry.text,
+                    color: entry.color,
+                    fontSize: entry.fontSize,
+                    pixelScale: pixelScale
+                ) else { continue }
+                self.cache.setObject(Box(image), forKey: entry.key, cost: image.bytesPerRow * image.height)
+            }
+            self.lock.lock()
+            for entry in payload { self.queued.remove(entry.key as String) }
+            self.lock.unlock()
+        }
+    }
+
+    private static func key(text: String, color: UInt32, fontSize: CGFloat, pixelScale: CGFloat) -> NSString {
+        "\(color)|\(Int((fontSize * 10).rounded()))|\(Int((pixelScale * 10).rounded()))|\(text)" as NSString
+    }
+
+    private static func draw(text: String, color: UInt32, fontSize: CGFloat, pixelScale: CGFloat) -> CGImage? {
+        let size = fontSize * pixelScale
+        guard size > 0.5 else { return nil }
+        let font = makeFont(size: size)
+        let attributes: [NSAttributedString.Key: Any] = [
+            NSAttributedString.Key(kCTFontAttributeName as String): font,
+            NSAttributedString.Key(kCTForegroundColorAttributeName as String): makeColor(color),
+            // Bilibili comments carry a thin dark outline so white text stays
+            // readable over bright frames.
+            NSAttributedString.Key(kCTStrokeColorAttributeName as String): CGColor(gray: 0, alpha: 0.9),
+            NSAttributedString.Key(kCTStrokeWidthAttributeName as String): -3.0,
+        ]
+        let line = CTLineCreateWithAttributedString(NSAttributedString(string: text, attributes: attributes))
+        var ascent: CGFloat = 0
+        var descent: CGFloat = 0
+        var leading: CGFloat = 0
+        let width = CGFloat(CTLineGetTypographicBounds(line, &ascent, &descent, &leading))
+        let pad = max(2, 2 * pixelScale)
+        let pixelWidth = Int((width + pad * 2).rounded(.up)) + 1
+        let pixelHeight = Int((ascent + descent + pad * 2).rounded(.up)) + 1
+        guard pixelWidth > 0, pixelHeight > 0,
+              let context = CGContext(
+                data: nil,
+                width: pixelWidth,
+                height: pixelHeight,
+                bitsPerComponent: 8,
+                bytesPerRow: 0,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+              )
+        else { return nil }
+        context.setAllowsAntialiasing(true)
+        context.setShouldAntialias(true)
+        context.textPosition = CGPoint(x: pad, y: descent + pad)
+        CTLineDraw(line, context)
+        return context.makeImage()
+    }
+
+    private static func makeFont(size: CGFloat) -> CTFont {
+#if os(iOS)
+        return UIFont.systemFont(ofSize: size, weight: .semibold) as CTFont
+#else
+        return NSFont.systemFont(ofSize: size, weight: .semibold) as CTFont
+#endif
+    }
+
+    private static func makeColor(_ value: UInt32) -> CGColor {
+        CGColor(
+            srgbRed: CGFloat((value >> 16) & 0xFF) / 255,
+            green: CGFloat((value >> 8) & 0xFF) / 255,
+            blue: CGFloat(value & 0xFF) / 255,
+            alpha: 1
+        )
+    }
+}
+
 private struct DanmakuLayerRecord {
-    let layer: CATextLayer
-    var fontSize: CGFloat
-    var height: CGFloat
-    var mode: Int
+    let layer: CALayer
+    let size: CGSize
 }
 
 private final class DanmakuRenderer {
     let container = CALayer()
     var yAxisDown = true
+    /// Textures are baked at the screen's pixel scale, so a change of scale
+    /// invalidates every layer rather than stretching it.
     var contentsScale: CGFloat = 2 {
         didSet {
             guard contentsScale != oldValue else { return }
-            for record in layers.values {
-                record.layer.contentsScale = contentsScale
-            }
+            removeAllLayers()
         }
     }
 
     var layerCount: Int { layers.count }
 
+    private let textures = DanmakuTextCache.shared
     private var items: [DanmakuItem] = []
     private var layers: [String: DanmakuLayerRecord] = [:]
     private var speed: Double = 1
     private var fontScale: Double = 1
+    private var lastPrewarm: Double = -.infinity
 
     init() {
         container.masksToBounds = true
@@ -365,6 +530,7 @@ private final class DanmakuRenderer {
         let staticLanes = min(3, max(1, Int(size.height * 0.28 / lineHeight)))
         let scrollLifetime = 8.0 / speed
         let maxLifetime = max(4.0, scrollLifetime)
+        let pixelScale = scale * contentsScale
 
         var index = lowerBound(for: time - maxLifetime)
         guard index < items.count else {
@@ -392,9 +558,8 @@ private final class DanmakuRenderer {
             }
 
             active.insert(item.id)
-            let fontSize = CGFloat(item.fontSize) * scale
-            let record = layerRecord(for: item, fontSize: fontSize, lineHeight: lineHeight, size: size)
-            position(record, item: item, time: time, size: size, lineHeight: lineHeight, scrollLifetime: scrollLifetime, scale: scale)
+            let record = layerRecord(for: item, pixelScale: pixelScale)
+            position(record, item: item, time: time, size: size, lineHeight: lineHeight, scrollLifetime: scrollLifetime)
         }
         CATransaction.commit()
 
@@ -407,57 +572,46 @@ private final class DanmakuRenderer {
                 layers.removeValue(forKey: id)?.layer.removeFromSuperlayer()
             }
         }
+
+        prewarmIfNeeded(at: time, pixelScale: pixelScale)
     }
 
-    private func layerRecord(for item: DanmakuItem, fontSize: CGFloat, lineHeight: CGFloat, size: CGSize) -> DanmakuLayerRecord {
-        let height = max(lineHeight, fontSize * 1.35)
-        if var record = layers[item.id] {
-            if abs(record.fontSize - fontSize) > 0.01 || abs(record.height - height) > 0.01 {
-                let font = makeFont(size: fontSize)
-                record.layer.font = font
-                record.layer.fontSize = fontSize
-                record.fontSize = fontSize
-                record.height = height
-                let width = item.mode == 1
-                    ? textWidth(item.text, font: font, fontSize: fontSize) + 6
-                    : max(size.width, 1)
-                record.layer.bounds = CGRect(x: 0, y: 0, width: width, height: height)
-                layers[item.id] = record
-            }
-            return record
-        }
+    /// One layer per comment, carrying a ready texture; creating it never
+    /// draws text on the main thread.
+    private func layerRecord(for item: DanmakuItem, pixelScale: CGFloat) -> DanmakuLayerRecord {
+        if let record = layers[item.id] { return record }
 
-        let font = makeFont(size: fontSize)
-        let textLayer = CATextLayer()
-        textLayer.contentsScale = contentsScale
-        textLayer.isWrapped = false
-        textLayer.truncationMode = .none
-        textLayer.masksToBounds = false
-        textLayer.alignmentMode = item.mode == 1 ? .left : .center
-        textLayer.anchorPoint = item.mode == 1 ? CGPoint(x: 0, y: 0.5) : CGPoint(x: 0.5, y: 0.5)
-        textLayer.font = font
-        textLayer.fontSize = fontSize
-        textLayer.foregroundColor = makeColor(item.colorValue)
-        textLayer.string = item.text
-        textLayer.actions = [
+        let layer = CALayer()
+        layer.contentsScale = contentsScale
+        layer.contentsGravity = .resize
+        layer.masksToBounds = false
+        layer.anchorPoint = item.mode == 1 ? CGPoint(x: 0, y: 0.5) : CGPoint(x: 0.5, y: 0.5)
+        layer.actions = [
             "position": NSNull(),
             "bounds": NSNull(),
             "frame": NSNull(),
             "contents": NSNull(),
-            "font": NSNull(),
-            "fontSize": NSNull(),
-            "foregroundColor": NSNull(),
-            "string": NSNull(),
             "opacity": NSNull(),
             "hidden": NSNull(),
         ]
-        let width = item.mode == 1
-            ? textWidth(item.text, font: font, fontSize: fontSize) + 6
-            : max(size.width, 1)
-        textLayer.bounds = CGRect(x: 0, y: 0, width: width, height: height)
-        container.addSublayer(textLayer)
+        let image = textures.image(
+            text: item.text,
+            color: item.colorValue,
+            fontSize: CGFloat(item.fontSize),
+            pixelScale: pixelScale
+        )
+        var size = CGSize.zero
+        if let image {
+            layer.contents = image
+            size = CGSize(
+                width: CGFloat(image.width) / contentsScale,
+                height: CGFloat(image.height) / contentsScale
+            )
+            layer.bounds = CGRect(origin: .zero, size: size)
+        }
+        container.addSublayer(layer)
 
-        let record = DanmakuLayerRecord(layer: textLayer, fontSize: fontSize, height: height, mode: item.mode)
+        let record = DanmakuLayerRecord(layer: layer, size: size)
         layers[item.id] = record
         return record
     }
@@ -468,8 +622,7 @@ private final class DanmakuRenderer {
         time: Double,
         size: CGSize,
         lineHeight: CGFloat,
-        scrollLifetime: Double,
-        scale: CGFloat
+        scrollLifetime: Double
     ) {
         let lane = CGFloat(item.lane)
         let top: CGFloat
@@ -484,16 +637,31 @@ private final class DanmakuRenderer {
 
         if item.mode == 1 {
             let progress = CGFloat((time - item.start) / scrollLifetime)
-            let travel = CGFloat(item.widthUnits * item.fontSize) * scale + 12
+            // Travel the full picture plus the text itself, so the tail has
+            // just left the right edge when the comment expires.
+            let travel = record.size.width + 8
             let x = size.width - progress * (size.width + travel)
             record.layer.position = CGPoint(x: x, y: positionY)
         } else {
-            let width = max(size.width, 1)
-            if abs(record.layer.bounds.width - width) > 0.5 {
-                record.layer.bounds = CGRect(x: 0, y: 0, width: width, height: record.height)
-            }
             record.layer.position = CGPoint(x: size.width / 2, y: positionY)
         }
+    }
+
+    /// Keeps the next couple of seconds of comments pre-drawn, so the frame a
+    /// comment appears in only has to move a layer into place.
+    private func prewarmIfNeeded(at time: Double, pixelScale: CGFloat) {
+        guard time - lastPrewarm > 0.2, time >= lastPrewarm else { return }
+        lastPrewarm = time
+        var upcoming: [DanmakuItem] = []
+        upcoming.reserveCapacity(64)
+        var index = lowerBound(for: time)
+        while index < items.count, items[index].start <= time + 2.5, upcoming.count < 64 {
+            let item = items[index]
+            index += 1
+            guard item.lane >= 0 else { continue }
+            upcoming.append(item)
+        }
+        textures.prewarm(upcoming, pixelScale: pixelScale)
     }
 
     private func removeAllLayers() {
@@ -519,28 +687,5 @@ private final class DanmakuRenderer {
             }
         }
         return low
-    }
-
-    private func makeFont(size: CGFloat) -> CTFont {
-#if os(iOS)
-        return UIFont.systemFont(ofSize: size, weight: .semibold) as CTFont
-#else
-        return NSFont.systemFont(ofSize: size, weight: .semibold) as CTFont
-#endif
-    }
-
-    private func textWidth(_ text: String, font: CTFont, fontSize: CGFloat) -> CGFloat {
-        let attributes = [NSAttributedString.Key(kCTFontAttributeName as String): font]
-        let line = CTLineCreateWithAttributedString(NSAttributedString(string: text, attributes: attributes))
-        return CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil))
-    }
-
-    private func makeColor(_ value: UInt32) -> CGColor {
-        CGColor(
-            srgbRed: CGFloat((value >> 16) & 0xFF) / 255,
-            green: CGFloat((value >> 8) & 0xFF) / 255,
-            blue: CGFloat(value & 0xFF) / 255,
-            alpha: 1
-        )
     }
 }

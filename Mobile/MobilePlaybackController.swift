@@ -805,7 +805,13 @@ final class MobilePlaybackController: NSObject {
     private func assignDanmakuLanes() {
         let scrollLaneCount = 10
         let staticLaneCount = 3
-        var scrollFreeAt = Array(repeating: 0.0, count: scrollLaneCount)
+        // A scrolling comment is born at the right edge and dies at the left,
+        // travelling `viewport + width` in `scrollLifetime`; its speed is
+        // therefore proportional to its width. Deciding whether a lane is
+        // free needs the previous comment there, not just a timestamp.
+        let viewport = 480.0
+        var scrollLaneStart = Array(repeating: -Double.greatestFiniteMagnitude, count: scrollLaneCount)
+        var scrollLaneWidth = Array(repeating: 0.0, count: scrollLaneCount)
         var topFreeAt = Array(repeating: 0.0, count: staticLaneCount)
         var bottomFreeAt = Array(repeating: 0.0, count: staticLaneCount)
         let order = danmakuItems.indices.sorted { danmakuItems[$0].start < danmakuItems[$1].start }
@@ -814,30 +820,43 @@ final class MobilePlaybackController: NSObject {
             let item = danmakuItems[index]
             let width = max(40, item.widthUnits * item.fontSize)
             if item.mode == 1 {
-                // Free a lane only after the previous comment's tail has cleared a narrow viewport.
-                let clearance = scrollLifetime * (width + 24) / (400 + width)
+                let speed = (viewport + width) / scrollLifetime
                 var chosen = -1
                 var earliest = Double.greatestFiniteMagnitude
                 var earliestLane = 0
                 for lane in 0..<scrollLaneCount {
-                    if scrollFreeAt[lane] <= item.start {
+                    let previousStart = scrollLaneStart[lane]
+                    let previousWidth = scrollLaneWidth[lane]
+                    // The tail of the comment in front must have cleared the
+                    // right edge before this one is born…
+                    let previousSpeed = (viewport + previousWidth) / scrollLifetime
+                    let tailClear = previousStart + (previousWidth + 24) / previousSpeed
+                    // …and this one must not catch up with it before it leaves.
+                    let noCatchUp = previousStart + scrollLifetime - viewport / speed
+                    let freeAt = max(tailClear, noCatchUp)
+                    if freeAt <= item.start {
                         chosen = lane
                         break
                     }
-                    if scrollFreeAt[lane] < earliest {
-                        earliest = scrollFreeAt[lane]
+                    if freeAt < earliest {
+                        earliest = freeAt
                         earliestLane = lane
                     }
                 }
                 if chosen < 0 {
-                    guard earliest - item.start < 0.35 else {
+                    // Two comments in one lane keep a constant distance for
+                    // their whole life, so even a short wait means the texts
+                    // sit on top of each other. Only sub-frame gaps are worth
+                    // taking; the rest are dropped, as Bilibili does.
+                    guard earliest - item.start < 0.05 else {
                         danmakuItems[index].lane = -1
                         continue
                     }
                     chosen = earliestLane
                 }
                 danmakuItems[index].lane = chosen
-                scrollFreeAt[chosen] = item.start + clearance
+                scrollLaneStart[chosen] = item.start
+                scrollLaneWidth[chosen] = width
             } else {
                 let isTop = item.mode == 5
                 var freeAt = isTop ? topFreeAt : bottomFreeAt
