@@ -26,28 +26,26 @@ private struct FeedScrollOffsetObserver: ViewModifier {
     }
 }
 
-struct MobileHomeView: View {
+/// Lives apart from the feed so tucking the bars away invalidates only the
+/// bar row — re-running the feed's body over a 1000+ item list is what made
+/// the old height-collapse stutter (#1).
+@MainActor
+@Observable
+final class HomeBarsState {
+    var hidden = false
+}
+
+/// The logo row, tab pills and (on 分区) the filter pills. Kept in its own
+/// view so hiding it doesn't re-render the feed.
+private struct HomeBars: View {
     @Environment(AppModel.self) private var model
     @Environment(\.colorScheme) private var scheme
 
-    /// #1: the header and tab bar collapse while the list scrolls down.
-    @State private var barsHidden = false
-    @State private var barsHeight: CGFloat = 56
-    /// #2: one scroll anchor per (tab, filter), so coming back lands where you left.
-    @State private var topIDs: [String: String] = [:]
-    @State private var currentTopID: String?
-    /// #3: bumping this scrolls the list back to the top.
-    @State private var scrollToTopToken = 0
-    /// Restoring a tab's anchor moves the offset in one jump; that jump must
-    /// not be read as "the user scrolled down" (#2).
-    @State private var suppressBarTracking = false
-
-    private var tabKey: String { model.homeSnapshotKey }
+    let bars: HomeBarsState
+    let height: CGFloat
+    let onTop: () -> Void
 
     var body: some View {
-        // Full-bleed top: cards scroll away under the status bar instead of
-        // stopping below it, so the list really does vanish into the phone's
-        // top edge once the bars have tucked away.
         VStack(spacing: 0) {
             VStack(spacing: 0) {
                 header
@@ -62,33 +60,15 @@ struct MobileHomeView: View {
                     Color.clear.preference(key: BarsHeightKey.self, value: proxy.size.height)
                 }
             )
-            .frame(height: barsHidden ? 0 : barsHeight, alignment: .top)
-            .clipped()
-            .opacity(barsHidden ? 0 : 1)
-            .animation(BtbMotion.snappy, value: barsHidden)
-
-            Divider().opacity(barsHidden ? 0 : 0.5)
-            feed
+            Divider()
         }
-        .ignoresSafeArea(.container, edges: .top)
         .background(AppTheme.background(scheme))
-        .toolbar(.hidden, for: .navigationBar)
-        .animation(BtbMotion.smooth, value: model.homeTab)
-        .onPreferenceChange(BarsHeightKey.self) { height in
-            if height > 20 { barsHeight = height }
-        }
-        .onChange(of: currentTopID) { _, newValue in
-            topIDs[tabKey] = newValue
-        }
-        .onChange(of: tabKey) { _, _ in
-            currentTopID = topIDs[tabKey]
-            barsHidden = false
-            suppressBarTracking = true
-            Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 450_000_000)
-                suppressBarTracking = false
-            }
-        }
+        .offset(y: bars.hidden ? -(height + 1) : 0)
+        .opacity(bars.hidden ? 0 : 1)
+        // An invisible overlay still eats taps, which would kill the first
+        // card's press while the bars are tucked away.
+        .allowsHitTesting(!bars.hidden)
+        .animation(BtbMotion.snappy, value: bars.hidden)
     }
 
     private var header: some View {
@@ -123,7 +103,7 @@ struct MobileHomeView: View {
         .padding(.top, 6)
         .padding(.bottom, 10)
         // #3: double tap the logo for "back to the top, refreshed".
-        .onTapGesture(count: 2) { scrollToTopAndRefresh() }
+        .onTapGesture(count: 2) { onTop() }
     }
 
     private var tabBar: some View {
@@ -138,7 +118,7 @@ struct MobileHomeView: View {
                     .simultaneousGesture(
                         TapGesture(count: 2).onEnded {
                             guard model.homeTab == tab else { return }
-                            scrollToTopAndRefresh()
+                            onTop()
                         }
                     )
                 }
@@ -159,7 +139,7 @@ struct MobileHomeView: View {
                     .simultaneousGesture(
                         TapGesture(count: 2).onEnded {
                             guard model.homeFilter == filter else { return }
-                            scrollToTopAndRefresh()
+                            onTop()
                         }
                     )
                 }
@@ -168,10 +148,66 @@ struct MobileHomeView: View {
         }
         .padding(.bottom, 9)
     }
+}
+
+struct MobileHomeView: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.colorScheme) private var scheme
+
+    /// #1: the header and tab bar slip away while the list scrolls down.
+    @State private var bars = HomeBarsState()
+    @State private var barsHeight: CGFloat = 56
+    /// #2: one scroll anchor per (tab, filter), so coming back lands where you left.
+    @State private var topIDs: [String: String] = [:]
+    @State private var currentTopID: String?
+    /// #3: bumping this scrolls the list back to the top.
+    @State private var scrollToTopToken = 0
+    /// Restoring a tab's anchor moves the offset in one jump; that jump must
+    /// not be read as "the user scrolled down" (#2).
+    @State private var suppressBarTracking = false
+
+    private var tabKey: String { model.homeSnapshotKey }
+
+    var body: some View {
+        // Full-bleed top: cards scroll away under the status bar instead of
+        // stopping below it, so the list really does vanish into the phone's
+        // top edge once the bars have tucked away.
+        //
+        // The bars float above the feed rather than sharing a VStack with it:
+        // collapsing a row's height re-lays out the whole list, while sliding
+        // one overlay layer costs nothing.
+        ZStack(alignment: .top) {
+            feed
+                // Reserve the bars' room so the first card starts below them
+                // at rest, and content slides under them while scrolling.
+                .contentMargins(.top, barsHeight, for: .scrollContent)
+
+            HomeBars(bars: bars, height: barsHeight, onTop: scrollToTopAndRefresh)
+        }
+        .ignoresSafeArea(.container, edges: .top)
+        .background(AppTheme.background(scheme))
+        .toolbar(.hidden, for: .navigationBar)
+        .animation(BtbMotion.smooth, value: model.homeTab)
+        .onPreferenceChange(BarsHeightKey.self) { height in
+            if height > 20 { barsHeight = height }
+        }
+        .onChange(of: currentTopID) { _, newValue in
+            topIDs[tabKey] = newValue
+        }
+        .onChange(of: tabKey) { _, _ in
+            currentTopID = topIDs[tabKey]
+            bars.hidden = false
+            suppressBarTracking = true
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 450_000_000)
+                suppressBarTracking = false
+            }
+        }
+    }
 
     private func scrollToTopAndRefresh() {
-        if barsHidden {
-            withAnimation(BtbMotion.snappy) { barsHidden = false }
+        if bars.hidden {
+            withAnimation(BtbMotion.snappy) { bars.hidden = false }
         }
         scrollToTopToken += 1
         topIDs[tabKey] = nil
@@ -208,12 +244,12 @@ struct MobileHomeView: View {
                 // scrolling up (anywhere in the list) brings them back, so a
                 // tab switch is reachable from deep inside a feed (#1, #2).
                 let moved = new - old
-                if new <= 12, barsHidden {
-                    withAnimation(BtbMotion.snappy) { barsHidden = false }
-                } else if moved > 6, new > 60, !barsHidden {
-                    withAnimation(BtbMotion.snappy) { barsHidden = true }
-                } else if moved < -6, barsHidden {
-                    withAnimation(BtbMotion.snappy) { barsHidden = false }
+                if new <= 12, bars.hidden {
+                    withAnimation(BtbMotion.snappy) { bars.hidden = false }
+                } else if moved > 6, new > 60, !bars.hidden {
+                    withAnimation(BtbMotion.snappy) { bars.hidden = true }
+                } else if moved < -6, bars.hidden {
+                    withAnimation(BtbMotion.snappy) { bars.hidden = false }
                 }
             })
             .scrollPosition(id: $currentTopID, anchor: .top)
