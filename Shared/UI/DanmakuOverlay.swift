@@ -425,19 +425,28 @@ private final class DanmakuTextCache {
         let size = fontSize * pixelScale
         guard size > 0.5 else { return nil }
         let font = makeFont(size: size)
-        let attributes: [NSAttributedString.Key: Any] = [
+        // Bilibili comments carry a thin dark outline so white text stays
+        // readable over bright frames. CoreText only strokes centred on the
+        // glyph path, and the negative width that would keep the outline
+        // outside also paints *inside* the glyph: at this texture scale it
+        // eats most of every stroke, so the text reads as a hollow white line
+        // with a dark twin — the "重影". Draw the stroke first with a positive
+        // width, then cover its inner half with the fill.
+        let strokeAttributes: [NSAttributedString.Key: Any] = [
+            NSAttributedString.Key(kCTFontAttributeName as String): font,
+            NSAttributedString.Key(kCTStrokeColorAttributeName as String): CGColor(gray: 0, alpha: 0.9),
+            NSAttributedString.Key(kCTStrokeWidthAttributeName as String): 6.0,
+        ]
+        let fillAttributes: [NSAttributedString.Key: Any] = [
             NSAttributedString.Key(kCTFontAttributeName as String): font,
             NSAttributedString.Key(kCTForegroundColorAttributeName as String): makeColor(color),
-            // Bilibili comments carry a thin dark outline so white text stays
-            // readable over bright frames.
-            NSAttributedString.Key(kCTStrokeColorAttributeName as String): CGColor(gray: 0, alpha: 0.9),
-            NSAttributedString.Key(kCTStrokeWidthAttributeName as String): -3.0,
         ]
-        let line = CTLineCreateWithAttributedString(NSAttributedString(string: text, attributes: attributes))
+        let strokeLine = CTLineCreateWithAttributedString(NSAttributedString(string: text, attributes: strokeAttributes))
+        let fillLine = CTLineCreateWithAttributedString(NSAttributedString(string: text, attributes: fillAttributes))
         var ascent: CGFloat = 0
         var descent: CGFloat = 0
         var leading: CGFloat = 0
-        let width = CGFloat(CTLineGetTypographicBounds(line, &ascent, &descent, &leading))
+        let width = CGFloat(CTLineGetTypographicBounds(fillLine, &ascent, &descent, &leading))
         let pad = max(2, 2 * pixelScale)
         let pixelWidth = Int((width + pad * 2).rounded(.up)) + 1
         let pixelHeight = Int((ascent + descent + pad * 2).rounded(.up)) + 1
@@ -455,7 +464,9 @@ private final class DanmakuTextCache {
         context.setAllowsAntialiasing(true)
         context.setShouldAntialias(true)
         context.textPosition = CGPoint(x: pad, y: descent + pad)
-        CTLineDraw(line, context)
+        CTLineDraw(strokeLine, context)
+        context.textPosition = CGPoint(x: pad, y: descent + pad)
+        CTLineDraw(fillLine, context)
         return context.makeImage()
     }
 
@@ -585,7 +596,10 @@ private final class DanmakuRenderer {
         layer.contentsScale = contentsScale
         layer.contentsGravity = .resize
         layer.masksToBounds = false
-        layer.anchorPoint = item.mode == 1 ? CGPoint(x: 0, y: 0.5) : CGPoint(x: 0.5, y: 0.5)
+        // Top-left anchored, so the layer lands on whole device pixels: an
+        // odd-height texture centred on a half pixel is resampled every frame
+        // and reads as a soft grey twin under the glyphs (the `重影`).
+        layer.anchorPoint = .zero
         layer.actions = [
             "position": NSNull(),
             "bounds": NSNull(),
@@ -632,8 +646,11 @@ private final class DanmakuRenderer {
         default:
             top = size.height - 14 - (lane + 1) * lineHeight
         }
-        let centerY = top + lineHeight / 2
-        let positionY = yAxisDown ? centerY : size.height - centerY
+        // Centre the text in its lane, then place the layer by its top-left
+        // corner (anchorPoint `.zero`).
+        let textHeight = record.size.height
+        let textTop = top + (lineHeight - textHeight) / 2
+        let originY = yAxisDown ? textTop : size.height - textTop - textHeight
 
         if item.mode == 1 {
             let progress = CGFloat((time - item.start) / scrollLifetime)
@@ -641,10 +658,22 @@ private final class DanmakuRenderer {
             // just left the right edge when the comment expires.
             let travel = record.size.width + 8
             let x = size.width - progress * (size.width + travel)
-            record.layer.position = CGPoint(x: x, y: positionY)
+            record.layer.position = snapped(CGPoint(x: x, y: originY))
         } else {
-            record.layer.position = CGPoint(x: size.width / 2, y: positionY)
+            let x = (size.width - record.size.width) / 2
+            record.layer.position = snapped(CGPoint(x: x, y: originY))
         }
+    }
+
+    /// On the device-pixel grid: a texture that lands between two pixels is
+    /// resampled on every frame, which reads as a soft, offset twin of the
+    /// glyphs underneath the sharp one (`重影`).
+    private func snapped(_ point: CGPoint) -> CGPoint {
+        let scale = max(contentsScale, 1)
+        return CGPoint(
+            x: (point.x * scale).rounded() / scale,
+            y: (point.y * scale).rounded() / scale
+        )
     }
 
     /// Keeps the next couple of seconds of comments pre-drawn, so the frame a

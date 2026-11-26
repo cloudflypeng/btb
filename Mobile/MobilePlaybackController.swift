@@ -892,8 +892,6 @@ final class MobilePlaybackController: NSObject {
             if item.mode == 1 {
                 let speed = (viewport + width) / scrollLifetime
                 var chosen = -1
-                var earliest = Double.greatestFiniteMagnitude
-                var earliestLane = 0
                 for lane in 0..<scrollLaneCount {
                     let previousStart = scrollLaneStart[lane]
                     let previousWidth = scrollLaneWidth[lane]
@@ -908,21 +906,18 @@ final class MobilePlaybackController: NSObject {
                         chosen = lane
                         break
                     }
-                    if freeAt < earliest {
-                        earliest = freeAt
-                        earliestLane = lane
-                    }
                 }
                 if chosen < 0 {
                     // Two comments in one lane keep a constant distance for
                     // their whole life, so even a short wait means the texts
-                    // sit on top of each other. Only sub-frame gaps are worth
-                    // taking; the rest are dropped, as Bilibili does.
-                    guard earliest - item.start < 0.05 else {
-                        danmakuItems[index].lane = -1
-                        continue
-                    }
-                    chosen = earliestLane
+                    // sit on top of each other. That used to be allowed for
+                    // sub-0.05s gaps, but at 92% opacity the pair reads as a
+                    // doubled, ghosted glyph (`重影`) rather than two
+                    // comments — a spammy video is many people sending the
+                    // same words at the same moment. Drop the latecomer, as
+                    // Bilibili's own player does.
+                    danmakuItems[index].lane = -1
+                    continue
                 }
                 danmakuItems[index].lane = chosen
                 scrollLaneStart[chosen] = item.start
