@@ -506,6 +506,13 @@ final class AppModel {
     /// Local per-video playback positions (B4).
     @ObservationIgnored let playbackProgress = PlaybackProgressStore.shared
     @ObservationIgnored var playbackPrewarmTask: Task<Void, Never>?
+    /// bbcore health: the watchdog, the one restart in flight, and how many
+    /// restarts this session has needed.
+    @ObservationIgnored var coreWatchdogTask: Task<Void, Never>?
+    @ObservationIgnored var coreRecoveryTask: Task<Bool, Never>?
+    @ObservationIgnored var coreRecoveryCount = 0
+    @ObservationIgnored var lastCoreRecoveryAt: Date?
+    @ObservationIgnored var coreForegroundObserver: NSObjectProtocol?
     var started = false
     var homeRequest = UUID()
     var followingRequest = UUID()
@@ -563,6 +570,7 @@ final class AppModel {
             startDownloadEventStream()
             await loadDownloads(force: true)
             await applyDownloadConfig()
+            startCoreWatchdog()
 #if DEBUG
             if let raw = ProcessInfo.processInfo.environment["BTB_SECTION"],
                let section = SidebarSection(rawValue: raw) {
@@ -572,6 +580,16 @@ final class AppModel {
             // measured on a device with `devicectl ... --console`.
             if let bvid = ProcessInfo.processInfo.environment["BTB_OPEN_BVID"], !bvid.isEmpty {
                 openVideo(VideoItem(bvid: bvid))
+            }
+            // Simulates bbcore going away so the watchdog's restart can be
+            // exercised on a simulator.
+            if let seconds = Double(ProcessInfo.processInfo.environment["BTB_CORE_DIE_AFTER"] ?? ""),
+               seconds > 0 {
+                Task { @MainActor [weak self] in
+                    try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                    btbDebugLog("core: simulated death")
+                    await self?.core.stop()
+                }
             }
             if let raw = ProcessInfo.processInfo.environment["BTB_OPEN_UP_MID"],
                let upMid = Int64(raw), upMid > 0 {

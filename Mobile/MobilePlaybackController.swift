@@ -93,7 +93,13 @@ final class MobilePlaybackController: NSObject {
     @ObservationIgnored private var autoplayTask: Task<Void, Never>?
     @ObservationIgnored private var endObserver: NSObjectProtocol?
     @ObservationIgnored private var interruptionObserver: NSObjectProtocol?
+    @ObservationIgnored private var coreRecoveredObserver: NSObjectProtocol?
     @ObservationIgnored private var resumeAfterInterruption = false
+    /// One bbcore restart per video: a broken link must not turn into a loop.
+    @ObservationIgnored private var coreRecoveryAttempted = false
+    /// Position and play state to pick up after bbcore had to be restarted.
+    @ObservationIgnored private var resumeAfterCoreRecovery: Double?
+    @ObservationIgnored private var autoplayAfterCoreRecovery: Bool?
     @ObservationIgnored private var pipController: AVPictureInPictureController?
     /// AirPlay: the route picker hands playback to a TV, and the page swaps the
     /// picture for a cast panel while it is there.
@@ -130,6 +136,15 @@ final class MobilePlaybackController: NSObject {
                 self?.handleAudioInterruption(notification)
             }
         }
+        coreRecoveredObserver = NotificationCenter.default.addObserver(
+            forName: .btbCoreRecovered,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.handleCoreRecovered()
+            }
+        }
     }
 
     private func handleAudioInterruption(_ notification: Notification) {
@@ -143,11 +158,26 @@ final class MobilePlaybackController: NSObject {
             let options = AVAudioSession.InterruptionOptions(rawValue: rawOptions)
             if resumeAfterInterruption, options.contains(.shouldResume), isReady, !didReachEnd {
                 configureAudioSession()
+                claimPlaybackFocus()
                 player?.playImmediately(atRate: Float(playbackRate))
             }
             resumeAfterInterruption = false
         @unknown default:
             break
+        }
+    }
+
+    /// bbcore restarted underneath us: the HLS URL this player holds points
+    /// at a gateway that no longer exists. Resolve it again at the position
+    /// the user was at.
+    private func handleCoreRecovered() {
+        guard !isLocalPlayback, video != nil, model != nil, player != nil else { return }
+        coreRecoveryAttempted = false
+        resumeAfterCoreRecovery = currentTime
+        autoplayAfterCoreRecovery = isPlaying
+        Task { @MainActor [weak self] in
+            guard let self, !Task.isCancelled else { return }
+            await self.prepare()
         }
     }
 
@@ -186,6 +216,9 @@ final class MobilePlaybackController: NSObject {
 
     func load(video: VideoItem, model: AppModel) async {
         if self.video?.bvid == video.bvid, isReady || isLoading { return }
+        if self.video?.bvid != video.bvid {
+            coreRecoveryAttempted = false
+        }
         self.video = video
         self.model = model
         await prepare()
@@ -193,6 +226,7 @@ final class MobilePlaybackController: NSObject {
 
     func retry() async {
         guard video != nil, model != nil else { return }
+        coreRecoveryAttempted = false
         await prepare()
     }
 
@@ -266,7 +300,11 @@ final class MobilePlaybackController: NSObject {
                 return
             }
             selectedQuality = quality
-            try await load(quality: quality, startAt: initialResume(from: result), autoplay: true)
+            let startAt = resumeAfterCoreRecovery ?? initialResume(from: result)
+            let autoplay = autoplayAfterCoreRecovery ?? true
+            resumeAfterCoreRecovery = nil
+            autoplayAfterCoreRecovery = nil
+            try await load(quality: quality, startAt: startAt, autoplay: autoplay)
             startProgressLoop()
             ensureDanmakuSegment(for: 0)
         } catch {
@@ -277,6 +315,9 @@ final class MobilePlaybackController: NSObject {
             #if DEBUG
             btbDebugLog("play: prepare failed \(error)")
             #endif
+            if Self.looksLikeCoreFailure(error) {
+                recoverCoreAndRetry()
+            }
         }
     }
 
@@ -378,6 +419,8 @@ final class MobilePlaybackController: NSObject {
             self.player?.pause()
             self.isLoading = false
             self.errorMessage = "视频加载超时，请重试"
+            // The stream never arrived: the core's gateway may be wedged.
+            self.recoverCoreAndRetry()
         }
     }
 
@@ -408,11 +451,12 @@ final class MobilePlaybackController: NSObject {
             didReachEnd = false
             reportProgress(event: seekTo > 1 ? "seek" : "start", seconds: seekTo)
             observeEnd(of: item)
+            if seekTo > 1 {
+                player.seek(to: CMTime(seconds: seekTo, preferredTimescale: 600))
+                currentTime = seekTo
+            }
             if autoplay {
-                if seekTo > 1 {
-                    player.seek(to: CMTime(seconds: seekTo, preferredTimescale: 600))
-                    currentTime = seekTo
-                }
+                claimPlaybackFocus()
                 player.playImmediately(atRate: Float(playbackRate))
                 isPlaying = true
             }
@@ -435,6 +479,9 @@ final class MobilePlaybackController: NSObject {
             #if DEBUG
             btbDebugLog("play: item failed \(String(describing: item.error))")
             #endif
+            // The URL came from the core's own gateway; try a fresh core
+            // before telling the user the video is unplayable.
+            recoverCoreAndRetry()
         default:
             break
         }
@@ -497,6 +544,7 @@ final class MobilePlaybackController: NSObject {
                 didReachEnd = false
                 cancelAutoplay()
             }
+            claimPlaybackFocus()
             player.play()
             applyRate()
             isPlaying = true
@@ -678,6 +726,7 @@ final class MobilePlaybackController: NSObject {
     }
 
     func stop() {
+        MobilePlaybackFocus.shared.deactivate(self)
         cancelAutoplay()
         MobilePiPSession.endAll(stopPlayback: false)
         if isReady, !didReachEnd {
@@ -688,6 +737,10 @@ final class MobilePlaybackController: NSObject {
         if let interruptionObserver {
             NotificationCenter.default.removeObserver(interruptionObserver)
             self.interruptionObserver = nil
+        }
+        if let coreRecoveredObserver {
+            NotificationCenter.default.removeObserver(coreRecoveredObserver)
+            self.coreRecoveredObserver = nil
         }
         pipController?.delegate = nil
         pipController = nil
@@ -962,6 +1015,7 @@ final class MobilePlaybackController: NSObject {
     private func configureNowPlaying() {
         nowPlaying.onPlay = { [weak self] in
             guard let self, let player = self.player else { return }
+            self.claimPlaybackFocus()
             player.play()
             self.applyRate()
             self.isPlaying = true
@@ -1007,6 +1061,64 @@ final class MobilePlaybackController: NSObject {
             return message
         }
         return "视频加载失败，请稍后重试"
+    }
+
+    // MARK: - One stream at a time
+
+    /// Takes the app's single playback slot. Nothing else may play while
+    /// this controller does, and starting playback here pauses whoever held
+    /// it (the feed preview, a live room, another player page).
+    private func claimPlaybackFocus() {
+        MobilePlaybackFocus.shared.activate(
+            self,
+            pause: { [weak self] in
+                guard let self, let player = self.player,
+                      player.timeControlStatus != .paused else { return false }
+                player.pause()
+                self.isPlaying = false
+                self.refreshNowPlaying()
+                return true
+            },
+            resume: { [weak self] in
+                guard let self, let player = self.player, !self.didReachEnd else { return }
+                player.play()
+                self.applyRate()
+                self.isPlaying = true
+                self.refreshNowPlaying()
+            }
+        )
+    }
+
+    // MARK: - bbcore keepalive
+
+    /// Errors that mean the core itself is unreachable rather than the video
+    /// being unavailable.
+    private static func looksLikeCoreFailure(_ error: Error) -> Bool {
+        guard let coreError = error as? BBCoreError else { return false }
+        switch coreError {
+        case .connection, .coreExited, .notStarted, .invalidResponse,
+             .writeFailed, .launchFailed, .coreNotFound:
+            return true
+        case .rpc, .upstream:
+            return false
+        }
+    }
+
+    /// Restarts bbcore after a failed load, then prepares the same video
+    /// again. Once per video, so a video that is genuinely broken cannot keep
+    /// restarting the core.
+    private func recoverCoreAndRetry() {
+        guard !coreRecoveryAttempted, video != nil else { return }
+        coreRecoveryAttempted = true
+        Task { @MainActor [weak self] in
+            guard let self, let model = self.model else { return }
+            #if DEBUG
+            btbDebugLog("play: restarting bbcore after a failed load")
+            #endif
+            guard await model.recoverCore(reason: "playback") else { return }
+            guard !Task.isCancelled, self.video != nil else { return }
+            await self.prepare()
+        }
     }
 
     private func configureAudioSession() {

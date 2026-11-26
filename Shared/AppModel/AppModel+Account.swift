@@ -345,11 +345,14 @@ extension AppModel {
         toastTask?.cancel()
         downloadEventsTask?.cancel()
         downloadEventsTask = nil
+        stopCoreWatchdog()
         eventHub.stop()
         Task { await core.stop() }
     }
 
     func restartCore() async {
+        // The manual restart must not race the watchdog's own restart.
+        stopCoreWatchdog()
         await core.stop()
         started = false
         videos = []

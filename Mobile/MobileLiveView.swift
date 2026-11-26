@@ -371,6 +371,8 @@ private struct MobileLivePlayer: View {
     @State private var loadFailed = false
     @State private var statusCancellable: AnyCancellable?
     @State private var fullscreenHost: LandscapePlayerHost?
+    /// One core restart per room: a broken stream must not loop.
+    @State private var didRecoverCore = false
 
     private var playbackURL: URL? {
         guard model.livePlayback?.playable == true else { return nil }
@@ -413,9 +415,14 @@ private struct MobileLivePlayer: View {
         .onChange(of: playbackURL) { _, _ in
             applyPlayback()
         }
+        // bbcore restarted: the session URL we hold was served by the old one.
+        .onReceive(NotificationCenter.default.publisher(for: .btbCoreRecovered)) { _ in
+            Task { await model.refreshLivePlayback() }
+        }
         .onDisappear {
             if fullscreenHost == nil {
                 player.pause()
+                MobilePlaybackFocus.shared.deactivate(player)
             }
         }
     }
@@ -479,6 +486,7 @@ private struct MobileLivePlayer: View {
         }
         if (player.currentItem?.asset as? AVURLAsset)?.url != url {
             isReady = false
+            didRecoverCore = false
             let item = AVPlayerItem(url: url)
             player.replaceCurrentItem(with: item)
             statusCancellable = item.publisher(for: \.status)
@@ -490,13 +498,26 @@ private struct MobileLivePlayer: View {
                     case .failed:
                         loadFailed = true
                         isPlaying = false
+                        recoverCoreAndRetry()
                     default:
                         break
                     }
                 }
         }
+        MobilePlaybackFocus.shared.activate(player: player, isPlaying: $isPlaying)
         player.play()
         isPlaying = true
+    }
+
+    /// The stream comes through the core's own gateway; a failed load may
+    /// mean bbcore went away. Restart it once, then ask for the stream again.
+    private func recoverCoreAndRetry() {
+        guard !didRecoverCore else { return }
+        didRecoverCore = true
+        Task {
+            guard await model.recoverCore(reason: "live") else { return }
+            await model.refreshLivePlayback()
+        }
     }
 
     @MainActor
@@ -590,6 +611,7 @@ private struct MobileLiveControls: View {
                     if isPlaying {
                         player.pause()
                     } else {
+                        MobilePlaybackFocus.shared.activate(player: player, isPlaying: $isPlaying)
                         player.play()
                     }
                     isPlaying.toggle()

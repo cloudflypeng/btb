@@ -19,15 +19,16 @@ final class MobileRouter {
     var path: [MobileSheetRoute] = []
 
     func open(_ video: VideoItem) {
-        // Opening the same video again takes over from its floating window.
-        MobilePiPSession.end(forBVID: video.bvid, stopPlayback: true)
+        // A floating window keeps its own stream running; opening a player
+        // must not leave two videos playing at once.
+        MobilePiPSession.endAll(stopPlayback: true)
         rootVideo = video
         path = []
         isPlayerPresented = true
     }
 
     func play(_ video: VideoItem) {
-        MobilePiPSession.end(forBVID: video.bvid, stopPlayback: true)
+        MobilePiPSession.endAll(stopPlayback: true)
         rootVideo = video
         path = []
     }

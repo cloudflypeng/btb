@@ -16,6 +16,9 @@ final class PreviewPlayback {
     @ObservationIgnored private var sessionID: String?
     @ObservationIgnored private var task: Task<Void, Never>?
     @ObservationIgnored private var statusObservation: NSKeyValueObservation?
+    /// Ends this preview from the playback focus when another surface takes
+    /// over; holds the stream session's release with it.
+    @ObservationIgnored private var stopAction: (() -> Void)?
 
     func start(video: VideoItem, model: AppModel) {
         guard player == nil, task == nil else { return }
@@ -61,6 +64,7 @@ final class PreviewPlayback {
                     return
                 }
                 sessionID = stream.sessionID
+                stopAction = { [weak self] in self?.stop(model: model) }
                 let item = AVPlayerItem(url: url)
                 let player = AVPlayer(playerItem: item)
                 player.isMuted = true
@@ -71,6 +75,15 @@ final class PreviewPlayback {
                     Task { @MainActor [weak self] in
                         guard let self, self.player === player else { return }
                         self.isReady = true
+                        MobilePlaybackFocus.shared.activate(
+                            self,
+                            pause: { [weak self] in
+                                guard let self, self.player != nil else { return false }
+                                self.stopAction?()
+                                return true
+                            },
+                            resume: {}
+                        )
                         player.play()
                     }
                 }
@@ -83,6 +96,8 @@ final class PreviewPlayback {
     }
 
     func stop(model: AppModel) {
+        MobilePlaybackFocus.shared.deactivate(self)
+        stopAction = nil
         task?.cancel()
         task = nil
         statusObservation?.invalidate()
